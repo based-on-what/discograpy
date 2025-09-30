@@ -191,9 +191,53 @@ Developed with ❤️ for automation and music lovers.
 
 If you plan to run this for very large discographies frequently, consider:
 
-- Caching album/track metadata locally to avoid repeated API calls.  
-- Using exponential backoff settings tuned to your usage patterns.  
+- Caching album/track metadata locally to avoid repeated API calls.
+- Using exponential backoff settings tuned to your usage patterns.
 - Splitting playlist creation into smaller batches and verifying after each batch.
+
+---
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Authentication Error:**
+- Ensure your `.env` file contains valid credentials
+- Check that the redirect URI matches exactly what you set in the Spotify Developer Dashboard
+- Delete any `.cache` files and re-authenticate
+
+**Rate Limiting (HTTP 429):**
+- The script automatically handles rate limits with exponential backoff
+- If you encounter persistent rate limits, reduce the `max_workers` in the ThreadPoolExecutor (line 230)
+- Consider adding delays between operations
+
+**No Albums Found:**
+- Verify the artist has albums (not just singles/EPs) on Spotify
+- The script only includes albums of type 'album' (excludes singles, compilations, and EPs)
+- Try searching with the exact artist name as it appears on Spotify
+
+**Tracks Not Added:**
+- Check that your Spotify account has permission to create playlists
+- Ensure you're not hitting Spotify's rate limits
+- Check the log file (`spotify_discography.log`) for detailed error messages
+
+**Import Errors:**
+- Run `pip install spotipy python-dotenv` to install dependencies
+- Ensure you're using Python 3.8 or higher
+
+---
+
+## 💡 Performance Optimization
+
+The script has been optimized for performance with:
+
+- **Parallel Processing:** Uses ThreadPoolExecutor with 5 workers to fetch album tracks concurrently
+- **Efficient Ordering:** Maintains chronological order while processing albums in parallel
+- **Memory Efficiency:** Uses generators for pagination to avoid loading all data into memory
+- **Batch Processing:** Adds tracks to playlists in batches of 100 (Spotify's limit)
+- **Retry Logic:** Implements exponential backoff to handle transient failures
+
+For large discographies (1000+ tracks), the script typically completes in 2-5 minutes.
 
 
 Happy listening! 🎧
