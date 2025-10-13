@@ -394,7 +394,7 @@ The playlist appears **instantly** in your Spotify account and can be accessed f
 
 **Solutions:**
 1. The script handles this automatically with exponential backoff
-2. For persistent issues, reduce `max_workers` in line 621 of `playlists.py` (change from 5 to 3)
+2. For persistent issues, reduce `MAX_CONCURRENT_WORKERS` in line 125 of `playlists.py` (change from 5 to 3)
 3. Add artificial delays between operations
 4. Wait a few minutes before retrying
 
@@ -550,19 +550,25 @@ Before running the script, ensure you have:
 - **Large Discographies:** For artists with 1000+ tracks, the script typically completes in 2-5 minutes
 - **Caching:** Consider implementing local caching for frequently accessed artists
 - **Batch Operations:** Process multiple artists by creating a wrapper script
-- **Custom Workers:** Adjust `max_workers` (line 296) based on your network speed
+- **Custom Workers:** Adjust `MAX_CONCURRENT_WORKERS` constant (line 125) based on your network speed
+- **Timeouts:** Adjust `ALBUM_FETCH_TIMEOUT` constant (line 126) for slower connections
 
 ### Advanced Configuration
 
+The script uses class constants for easy configuration. You can modify these values in `playlists.py`:
+
 ```python
+# Performance constants (lines 125-127)
+MAX_CONCURRENT_WORKERS = 5  # Number of parallel album fetches (increase for faster processing)
+ALBUM_FETCH_TIMEOUT = 30    # Timeout in seconds for fetching album tracks
+SPOTIFY_BATCH_SIZE = 100    # Spotify API limit for adding tracks (do not exceed 100)
+
+# For more advanced customization:
 # Increase parallelism for faster processing (if network allows)
-with ThreadPoolExecutor(max_workers=10) as executor:  # Line 621
+with ThreadPoolExecutor(max_workers=10) as executor:  # Line 626
 
 # Adjust retry attempts for unstable connections
 @retry_on_failure(max_retries=5, delay=2.0)  # Lines 392, 540, 576, 639, 678
-
-# Change batch size (must not exceed 100)
-batch_size = 50  # Line 696
 ```
 
 ---
