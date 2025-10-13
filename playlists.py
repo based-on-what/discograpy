@@ -36,8 +36,10 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
         - For other errors, uses exponential backoff: delay * (2 ** attempt)
     """
     def decorator(func):
+        """Decorator wrapper that applies retry logic to the decorated function."""
         @wraps(func)
         def wrapper(*args, **kwargs):
+            """Execute function with retry logic and exponential backoff."""
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
