@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import os
 import time
 import logging
-from typing import List, Dict, Generator, Tuple, Optional, Set
+from typing import List, Dict, Tuple, Optional, Set
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,7 +19,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
 
 def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
     """Decorator for retrying API calls with exponential backoff.
@@ -61,7 +60,6 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
             return None
         return wrapper
     return decorator
-
 
 class SpotifyDiscographyCreator:
     """Optimized Spotify discography playlist creator with robust error handling and performance improvements."""
@@ -321,12 +319,15 @@ class SpotifyDiscographyCreator:
         actual_types = set()
         for album in filtered:
             album_type = album.get('album_type', '').lower()
+            total_tracks = album.get('total_tracks', 0)
+            
             if album_type == 'album':
                 actual_types.add('album')
-            elif self._is_ep(album):
-                actual_types.add('ep')
-            elif self._is_single(album):
-                actual_types.add('single')
+            elif album_type == 'single':
+                if 4 <= total_tracks <= 7:
+                    actual_types.add('ep')
+                elif total_tracks <= 3:
+                    actual_types.add('single')
             elif album_type == 'compilation':
                 actual_types.add('compilation')
         
@@ -339,12 +340,19 @@ class SpotifyDiscographyCreator:
             selection: Integer representing user's choice (0-6)
             actual_types: Set of actual album types found
         """
+        # Type name mapping for user-friendly messages
+        type_names = {
+            'album': 'Albums',
+            'ep': 'EPs',
+            'single': 'Singles'
+        }
+        
         # Only check for mixed selections
         if selection == 5:  # EPs + Singles
             expected = {'ep', 'single'}
             missing = expected - actual_types
             if missing:
-                missing_str = ' and '.join(m.upper() + 's' if m != 'ep' else 'EPs' for m in missing)
+                missing_str = ' and '.join(type_names.get(m, m) for m in missing)
                 print(f"\n⚠ Warning: {missing_str} not found on Spotify for this artist.")
                 print("Using available types instead.")
                 logger.warning(f"Missing types for selection {selection}: {missing}")
@@ -353,15 +361,7 @@ class SpotifyDiscographyCreator:
             expected = {'album', 'ep', 'single'}
             missing = expected - actual_types
             if missing:
-                missing_names = []
-                for m in missing:
-                    if m == 'album':
-                        missing_names.append('Albums')
-                    elif m == 'ep':
-                        missing_names.append('EPs')
-                    elif m == 'single':
-                        missing_names.append('Singles')
-                
+                missing_names = [type_names.get(m, m) for m in missing]
                 missing_str = ', '.join(missing_names)
                 print(f"\n⚠ Warning: {missing_str} not found on Spotify for this artist.")
                 print("Using available types instead.")
@@ -828,7 +828,6 @@ class SpotifyDiscographyCreator:
             print("Check spotify_discography.log for details.")
             raise
 
-
 def main():
     """Main entry point with error handling."""
     try:
@@ -843,7 +842,6 @@ def main():
     except Exception as e:
         logger.error(f"Application failed: {e}", exc_info=True)
         print("\n✗ Application encountered an error. Check logs for details.")
-
 
 if __name__ == "__main__":
     main()
