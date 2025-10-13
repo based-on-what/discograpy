@@ -32,10 +32,12 @@ The script has been **optimized for performance, scalability, error handling, an
 ## ✨ Features
 
 - Search for any artist on Spotify and select from all matching results.  
+- **Choose album types:** Everything, Albums only, EPs only, Singles only, Compilations only, or combinations (EPs + Singles, Albums + EPs + Singles).
 - Retrieve **all albums** (with pagination support).  
+- **Smart filtering:** Distinguishes between albums, EPs (4-7 tracks), and singles (1-3 tracks).
 - Collect **all tracks** from those albums using **threaded requests** for speed.  
 - **Retry logic with exponential backoff** to handle API failures and rate limits gracefully.  
-- Create a **new playlist in your account** with the full discography.  
+- Create a **new playlist in your account** with the full discography or selected type.  
 - Tracks added in **correct release order**.  
 - Professional **logging system** with timestamps and log levels.  
 - Robust **error handling** to deal with Spotify API quirks.
@@ -121,24 +123,24 @@ python playlists.py
 
 1. **Enter artist name:**
    ```
-   Enter artist name: Radiohead
+   Enter artist name: System of a Down
    ```
 
 2. **Select from matching artists** (if multiple found):
    ```
-   Found 3 artists:
-   1. Radiohead
-   2. Radioslave
-   3. Radio Company
+   Found 2 artists:
+   1. System of a Down
+   2. System of a Down Tribute
    
-   Select artist number (1-3): 1
+   Select artist number (1-2): 1
    ```
 
 3. The script will then:
-   - ✅ Fetch all albums by that artist (with pagination)
+   - ✅ Prompt for album type selection (Everything, Albums only, EPs only, Singles only, Compilations only, EPs + Singles, or Albums + EPs + Singles)
+   - ✅ Fetch all albums by that artist matching the selected type (with pagination)
    - ✅ Sort them by release date
-   - ✅ Collect all tracks from each album (using parallel processing)
-   - ✅ Create a new playlist: `[Artist Name] discography`
+   - ✅ Collect all tracks from each album (using parallel processing with 5 concurrent workers)
+   - ✅ Create a new playlist: `[Artist Name] discography [TYPE]`
    - ✅ Add all tracks in chronological order
 
 ---
@@ -277,10 +279,12 @@ The script requires the following Spotify OAuth scope:
 If you prefer **private playlists**, you can modify the script:
 
 ```python
-# In playlists.py, line 338, change:
+# In playlists.py, line 664, change:
 public=True  # to:
 public=False
 ```
+
+The script also adds a description to each playlist linking back to the project repository.
 
 ---
 
@@ -289,19 +293,31 @@ public=False
 ### Console Output
 
 ```
-Enter artist name: Radiohead
+Enter artist name: System of a Down
 
 Found 1 artist:
-1. Radiohead
+1. System of a Down
 
 Select artist number (1-1): 1
-Album: Pablo Honey
-Album: The Bends
-Album: OK Computer
-Album: Kid A
-Album: Amnesiac
-...
-'Radiohead discography' playlist created successfully!
+
+=== Album Type Selection ===
+0: Everything (all album types combined)
+1: Albums only
+2: EPs only
+3: Singles only
+4: Compilations only
+5: EPs + Singles
+6: Albums + EPs + Singles
+
+Select album type (0-6): 1
+
+Retrieving albums...
+Created playlist: System of a Down discography [ALBUMS]
+
+Retrieving tracks from albums...
+Adding 73 tracks to playlist...
+
+✓ 'System of a Down discography [ALBUMS]' playlist created successfully with 73 tracks!
 ```
 
 ### What Happens Behind the Scenes
@@ -309,11 +325,13 @@ Album: Amnesiac
 1. ✅ Spotify client initialized
 2. ✅ Artist search performed
 3. ✅ User selects correct artist
-4. ✅ All albums retrieved and sorted by release date
-5. ✅ Playlist created in your account
-6. ✅ Album tracks fetched in parallel (5 concurrent workers)
-7. ✅ Tracks added to playlist in batches of 100
-8. ✅ Success message displayed
+4. ✅ User selects album type (albums, EPs, singles, compilations, or combinations)
+5. ✅ All albums retrieved and filtered by type
+6. ✅ Albums sorted by release date
+7. ✅ Playlist created in your account with descriptive name
+8. ✅ Album tracks fetched in parallel (5 concurrent workers)
+9. ✅ Tracks added to playlist in batches of 100
+10. ✅ Success message displayed
 
 The playlist appears **instantly** in your Spotify account and can be accessed from any device.
 
@@ -325,7 +343,7 @@ The playlist appears **instantly** in your Spotify account and can be accessed f
 
 - **Batch Size:** Spotify API limits to 100 tracks per request (handled automatically)
 - **Rate Limiting:** The script respects rate limits with automatic retry and backoff
-- **Album Types:** Only **albums** are included (singles, compilations, and EPs are excluded)
+- **Album Types:** You can choose specific album types (albums, EPs, singles, compilations) or combine them
 
 ### Duplicate Handling
 
@@ -376,23 +394,25 @@ The playlist appears **instantly** in your Spotify account and can be accessed f
 
 **Solutions:**
 1. The script handles this automatically with exponential backoff
-2. For persistent issues, reduce `max_workers` in line 296 of `playlists.py` (change from 5 to 3)
+2. For persistent issues, reduce `MAX_CONCURRENT_WORKERS` in line 125 of `playlists.py` (change from 5 to 3)
 3. Add artificial delays between operations
 4. Wait a few minutes before retrying
 
 </details>
 
 <details>
-<summary><b>🟢 No Albums Found</b></summary>
+<summary><b>🟢 No Content Found</b></summary>
 
 **Symptoms:**
-- "No albums found for this artist"
+- "No [albums/EPs/singles/etc.] found for this artist"
 
 **Solutions:**
-1. Verify the artist has **albums** (not just singles/EPs) on Spotify
-2. Script only includes album type releases
-3. Try searching with exact artist name as shown on Spotify
-4. Check if the artist has region-specific content restrictions
+1. Verify the artist has the selected album type on Spotify
+2. Try selecting "Everything" to see all available content
+3. Some artists may not have all content types (e.g., no EPs or compilations)
+4. Try searching with exact artist name as shown on Spotify
+5. Check if the artist has region-specific content restrictions
+6. The script will offer to retry with a different album type or artist
 
 </details>
 
@@ -530,19 +550,25 @@ Before running the script, ensure you have:
 - **Large Discographies:** For artists with 1000+ tracks, the script typically completes in 2-5 minutes
 - **Caching:** Consider implementing local caching for frequently accessed artists
 - **Batch Operations:** Process multiple artists by creating a wrapper script
-- **Custom Workers:** Adjust `max_workers` (line 296) based on your network speed
+- **Custom Workers:** Adjust `MAX_CONCURRENT_WORKERS` constant (line 125) based on your network speed
+- **Timeouts:** Adjust `ALBUM_FETCH_TIMEOUT` constant (line 126) for slower connections
 
 ### Advanced Configuration
 
+The script uses class constants for easy configuration. You can modify these values in `playlists.py`:
+
 ```python
+# Performance constants (lines 125-127)
+MAX_CONCURRENT_WORKERS = 5  # Number of parallel album fetches (increase for faster processing)
+ALBUM_FETCH_TIMEOUT = 30    # Timeout in seconds for fetching album tracks
+SPOTIFY_BATCH_SIZE = 100    # Spotify API limit for adding tracks (do not exceed 100)
+
+# For more advanced customization:
 # Increase parallelism for faster processing (if network allows)
-with ThreadPoolExecutor(max_workers=10) as executor:  # Line 296
+with ThreadPoolExecutor(max_workers=10) as executor:  # Line 626
 
 # Adjust retry attempts for unstable connections
-@retry_on_failure(max_retries=5, delay=2.0)  # Lines 88, 198, 241, 314, 351
-
-# Change batch size (must not exceed 100)
-batch_size = 50  # Line 369
+@retry_on_failure(max_retries=5, delay=2.0)  # Lines 392, 540, 576, 639, 678
 ```
 
 ---

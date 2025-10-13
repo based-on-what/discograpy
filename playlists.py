@@ -36,8 +36,10 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
         - For other errors, uses exponential backoff: delay * (2 ** attempt)
     """
     def decorator(func):
+        """Decorator wrapper that applies retry logic to the decorated function."""
         @wraps(func)
         def wrapper(*args, **kwargs):
+            """Execute function with retry logic and exponential backoff."""
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
@@ -118,6 +120,11 @@ class SpotifyDiscographyCreator:
         "Made with DiscograPY, an open-source Spotify discography creator. "
         "Find the project at: https://github.com/based-on-what/discograpy"
     )
+
+    # Performance and API configuration constants
+    MAX_CONCURRENT_WORKERS = 5  # Number of concurrent album processing workers
+    ALBUM_FETCH_TIMEOUT = 30  # Timeout in seconds for fetching album tracks
+    SPOTIFY_BATCH_SIZE = 100  # Spotify API limit for adding tracks to playlist
 
     def __init__(self):
         """Initialize Spotify client with authentication."""
@@ -616,7 +623,7 @@ class SpotifyDiscographyCreator:
         all_track_uris = []
 
         # Use ThreadPoolExecutor for concurrent album processing
-        with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent requests
+        with ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT_WORKERS) as executor:
             # Submit all album track requests and maintain order with a list
             futures = [
                 executor.submit(self._get_album_tracks, album['uri'])
@@ -626,7 +633,7 @@ class SpotifyDiscographyCreator:
             # Process results in order to maintain album chronology
             for i, future in enumerate(futures):
                 try:
-                    track_uris = future.result(timeout=30)  # 30 second timeout
+                    track_uris = future.result(timeout=self.ALBUM_FETCH_TIMEOUT)
                     all_track_uris.extend(track_uris)
                     logger.info(f"Processed album: {albums[i]['name']} ({len(track_uris)} tracks)")
                 except Exception as e:
@@ -691,7 +698,7 @@ class SpotifyDiscographyCreator:
             logger.warning("No tracks to add to playlist")
             return
 
-        batch_size = 100  # Spotify API limit
+        batch_size = self.SPOTIFY_BATCH_SIZE
         total_batches = (len(track_uris) + batch_size - 1) // batch_size
 
         for i, batch_start in enumerate(range(0, len(track_uris), batch_size)):
