@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import os
 import time
 import logging
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Generator, Tuple, Optional, Set
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,11 +14,18 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('spotify_discography.log'),
+        logging.FileHandler('spotify_discography.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Set console handler to use utf-8 encoding
+for handler in logging.getLogger().handlers:
+    if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+        # For Windows console compatibility, use 'replace' error handling
+        handler.setStream(open(handler.stream.fileno(), mode='w', encoding='utf-8', errors='replace', closefd=False))
+
 
 def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
     """Decorator for retrying API calls with exponential backoff.
@@ -35,10 +42,8 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
         - For other errors, uses exponential backoff: delay * (2 ** attempt)
     """
     def decorator(func):
-        """Decorator wrapper that applies retry logic to the decorated function."""
         @wraps(func)
         def wrapper(*args, **kwargs):
-            """Execute function with retry logic and exponential backoff."""
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
@@ -60,6 +65,7 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
             return None
         return wrapper
     return decorator
+
 
 class SpotifyDiscographyCreator:
     """Optimized Spotify discography playlist creator with robust error handling and performance improvements."""
@@ -118,11 +124,6 @@ class SpotifyDiscographyCreator:
         "Made with DiscograPY, an open-source Spotify discography creator. "
         "Find the project at: https://github.com/based-on-what/discograpy"
     )
-
-    # Performance and API configuration constants
-    MAX_CONCURRENT_WORKERS = 5  # Number of concurrent album processing workers
-    ALBUM_FETCH_TIMEOUT = 30  # Timeout in seconds for fetching album tracks
-    SPOTIFY_BATCH_SIZE = 100  # Spotify API limit for adding tracks to playlist
 
     def __init__(self):
         """Initialize Spotify client with authentication."""
@@ -319,15 +320,12 @@ class SpotifyDiscographyCreator:
         actual_types = set()
         for album in filtered:
             album_type = album.get('album_type', '').lower()
-            total_tracks = album.get('total_tracks', 0)
-            
             if album_type == 'album':
                 actual_types.add('album')
-            elif album_type == 'single':
-                if 4 <= total_tracks <= 7:
-                    actual_types.add('ep')
-                elif total_tracks <= 3:
-                    actual_types.add('single')
+            elif self._is_ep(album):
+                actual_types.add('ep')
+            elif self._is_single(album):
+                actual_types.add('single')
             elif album_type == 'compilation':
                 actual_types.add('compilation')
         
@@ -340,19 +338,12 @@ class SpotifyDiscographyCreator:
             selection: Integer representing user's choice (0-6)
             actual_types: Set of actual album types found
         """
-        # Type name mapping for user-friendly messages
-        type_names = {
-            'album': 'Albums',
-            'ep': 'EPs',
-            'single': 'Singles'
-        }
-        
         # Only check for mixed selections
         if selection == 5:  # EPs + Singles
             expected = {'ep', 'single'}
             missing = expected - actual_types
             if missing:
-                missing_str = ' and '.join(type_names.get(m, m) for m in missing)
+                missing_str = ' and '.join(m.upper() + 's' if m != 'ep' else 'EPs' for m in missing)
                 print(f"\n⚠ Warning: {missing_str} not found on Spotify for this artist.")
                 print("Using available types instead.")
                 logger.warning(f"Missing types for selection {selection}: {missing}")
@@ -361,7 +352,15 @@ class SpotifyDiscographyCreator:
             expected = {'album', 'ep', 'single'}
             missing = expected - actual_types
             if missing:
-                missing_names = [type_names.get(m, m) for m in missing]
+                missing_names = []
+                for m in missing:
+                    if m == 'album':
+                        missing_names.append('Albums')
+                    elif m == 'ep':
+                        missing_names.append('EPs')
+                    elif m == 'single':
+                        missing_names.append('Singles')
+                
                 missing_str = ', '.join(missing_names)
                 print(f"\n⚠ Warning: {missing_str} not found on Spotify for this artist.")
                 print("Using available types instead.")
@@ -623,7 +622,7 @@ class SpotifyDiscographyCreator:
         all_track_uris = []
 
         # Use ThreadPoolExecutor for concurrent album processing
-        with ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT_WORKERS) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent requests
             # Submit all album track requests and maintain order with a list
             futures = [
                 executor.submit(self._get_album_tracks, album['uri'])
@@ -633,7 +632,7 @@ class SpotifyDiscographyCreator:
             # Process results in order to maintain album chronology
             for i, future in enumerate(futures):
                 try:
-                    track_uris = future.result(timeout=self.ALBUM_FETCH_TIMEOUT)
+                    track_uris = future.result(timeout=30)  # 30 second timeout
                     all_track_uris.extend(track_uris)
                     logger.info(f"Processed album: {albums[i]['name']} ({len(track_uris)} tracks)")
                 except Exception as e:
@@ -698,7 +697,7 @@ class SpotifyDiscographyCreator:
             logger.warning("No tracks to add to playlist")
             return
 
-        batch_size = self.SPOTIFY_BATCH_SIZE
+        batch_size = 100  # Spotify API limit
         total_batches = (len(track_uris) + batch_size - 1) // batch_size
 
         for i, batch_start in enumerate(range(0, len(track_uris), batch_size)):
@@ -828,6 +827,7 @@ class SpotifyDiscographyCreator:
             print("Check spotify_discography.log for details.")
             raise
 
+
 def main():
     """Main entry point with error handling."""
     try:
@@ -842,6 +842,7 @@ def main():
     except Exception as e:
         logger.error(f"Application failed: {e}", exc_info=True)
         print("\n✗ Application encountered an error. Check logs for details.")
+
 
 if __name__ == "__main__":
     main()
