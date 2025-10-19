@@ -35,12 +35,13 @@ The script has been **optimized for performance, scalability, error handling, an
 - **Choose album types:** Everything, Albums only, EPs only, Singles only, Compilations only, or combinations (EPs + Singles, Albums + EPs + Singles).
 - Retrieve **all albums** (with pagination support).  
 - **Smart filtering:** Distinguishes between albums, EPs (4-7 tracks), and singles (1-3 tracks).
+- **Intelligent missing type handling:** Warns users when selected album types aren't available and adjusts playlist names accordingly.
 - Collect **all tracks** from those albums using **threaded requests** for speed.  
 - **Retry logic with exponential backoff** to handle API failures and rate limits gracefully.  
 - Create a **new playlist in your account** with the full discography or selected type.  
 - Tracks added in **correct release order**.  
-- Professional **logging system** with timestamps and log levels.  
-- Robust **error handling** to deal with Spotify API quirks.
+- Professional **logging system** with timestamps, log levels, and **UTF-8 encoding support** for international characters.  
+- Robust **error handling** to deal with Spotify API quirks, with interactive retry options.
 
 ---
 
@@ -138,6 +139,8 @@ python playlists.py
 3. The script will then:
    - ✅ Prompt for album type selection (Everything, Albums only, EPs only, Singles only, Compilations only, EPs + Singles, or Albums + EPs + Singles)
    - ✅ Fetch all albums by that artist matching the selected type (with pagination)
+   - ✅ Check for missing album types and warn if selected types aren't available
+   - ✅ Adjust playlist name based on actual content found
    - ✅ Sort them by release date
    - ✅ Collect all tracks from each album (using parallel processing with 5 concurrent workers)
    - ✅ Create a new playlist: `[Artist Name] discography [TYPE]`
@@ -180,6 +183,14 @@ discography/
 
 The script uses Python's `logging` module for professional logging with both console and file output.
 
+### UTF-8 Encoding Support
+
+The logging system now includes **UTF-8 encoding support** with error handling for Windows compatibility:
+- Console output uses UTF-8 encoding with 'replace' error handling
+- Properly displays international characters and special symbols (✓, ✗, ⚠, etc.)
+- File logging also uses UTF-8 encoding for comprehensive log files
+- Compatible with artists using non-Latin characters (e.g., Japanese, Korean, Cyrillic)
+
 ### Log Locations
 
 - **Console:** Real-time `INFO` level messages
@@ -218,9 +229,10 @@ This script includes several optimizations compared to a basic implementation:
 | **Parallel Processing** | Uses `ThreadPoolExecutor` (5 workers) for concurrent album fetching | 3-5x faster |
 | **Resilience** | Retry logic with exponential backoff for API errors | Handles transient failures |
 | **Memory Efficiency** | Generator-based pagination | Low memory footprint |
-| **Professional Logging** | Structured logging via `logging` module | Easy debugging |
-| **User Experience** | Interactive artist selection with validation | Clear and intuitive |
+| **Professional Logging** | Structured logging via `logging` module with UTF-8 encoding support | Easy debugging and international character support |
+| **User Experience** | Interactive artist selection with validation and retry options | Clear and intuitive |
 | **Error Handling** | Comprehensive try-except blocks with specific error messages | Graceful failures |
+| **Smart Type Detection** | Warns when selected album types are missing and adjusts playlist names | Accurate playlist naming and user awareness |
 
 ---
 
@@ -320,6 +332,26 @@ Adding 73 tracks to playlist...
 ✓ 'System of a Down discography [ALBUMS]' playlist created successfully with 73 tracks!
 ```
 
+### Example with Missing Types Warning
+
+When selecting a combination that includes types not available for an artist:
+
+```
+Select album type (0-6): 5
+
+Retrieving albums...
+
+⚠ Warning: EPs not found on Spotify for this artist.
+Using available types instead.
+
+Created playlist: Artist Name discography [SINGLES]
+
+Retrieving tracks from albums...
+Adding 12 tracks to playlist...
+
+✓ 'Artist Name discography [SINGLES]' playlist created successfully with 12 tracks!
+```
+
 ### What Happens Behind the Scenes
 
 1. ✅ Spotify client initialized
@@ -327,11 +359,13 @@ Adding 73 tracks to playlist...
 3. ✅ User selects correct artist
 4. ✅ User selects album type (albums, EPs, singles, compilations, or combinations)
 5. ✅ All albums retrieved and filtered by type
-6. ✅ Albums sorted by release date
-7. ✅ Playlist created in your account with descriptive name
-8. ✅ Album tracks fetched in parallel (5 concurrent workers)
-9. ✅ Tracks added to playlist in batches of 100
-10. ✅ Success message displayed
+6. ✅ Missing album types detected and user warned if necessary
+7. ✅ Playlist name adjusted based on actual content found
+8. ✅ Albums sorted by release date
+9. ✅ Playlist created in your account with descriptive name
+10. ✅ Album tracks fetched in parallel (5 concurrent workers)
+11. ✅ Tracks added to playlist in batches of 100
+12. ✅ Success message displayed
 
 The playlist appears **instantly** in your Spotify account and can be accessed from any device.
 
@@ -412,7 +446,8 @@ The playlist appears **instantly** in your Spotify account and can be accessed f
 3. Some artists may not have all content types (e.g., no EPs or compilations)
 4. Try searching with exact artist name as shown on Spotify
 5. Check if the artist has region-specific content restrictions
-6. The script will offer to retry with a different album type or artist
+6. The script will automatically warn you when types are missing and adjust the playlist name
+7. Choose option 1 to retry with a different album type, or option 0 to search for a different artist
 
 </details>
 
