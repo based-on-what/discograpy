@@ -40,7 +40,7 @@ The script has been **optimized for performance, scalability, error handling, an
 - **Retry logic with exponential backoff** to handle API failures and rate limits gracefully.  
 - Create a **new playlist in your account** with the full discography or selected type.  
 - Tracks added in **correct release order**.  
-- Professional **logging system** with timestamps, log levels, and **UTF-8 encoding support** for international characters.  
+- Professional **logging system** with timestamps, log levels, and *UTF-8 encoding support* for international characters.  
 - Robust **error handling** to deal with Spotify API quirks, with interactive retry options.
 
 ---
@@ -229,7 +229,7 @@ This script includes several optimizations compared to a basic implementation:
 | **Parallel Processing** | Uses `ThreadPoolExecutor` (5 workers) for concurrent album fetching | 3-5x faster |
 | **Resilience** | Retry logic with exponential backoff for API errors | Handles transient failures |
 | **Memory Efficiency** | Generator-based pagination | Low memory footprint |
-| **Professional Logging** | Structured logging via `logging` module with UTF-8 encoding support | Easy debugging and international character support |
+| **Professional Logging** | Structured logging via `logging` module with UTF-8 encoding support | Easy debugging with international characters |
 | **User Experience** | Interactive artist selection with validation and retry options | Clear and intuitive |
 | **Error Handling** | Comprehensive try-except blocks with specific error messages | Graceful failures |
 | **Smart Type Detection** | Warns when selected album types are missing and adjusts playlist names | Accurate playlist naming and user awareness |
@@ -344,12 +344,12 @@ Retrieving albums...
 ⚠ Warning: EPs not found on Spotify for this artist.
 Using available types instead.
 
-Created playlist: Artist Name discography [SINGLES]
+Created playlist: The Beatles discography [SINGLES]
 
 Retrieving tracks from albums...
 Adding 12 tracks to playlist...
 
-✓ 'Artist Name discography [SINGLES]' playlist created successfully with 12 tracks!
+✓ 'The Beatles discography [SINGLES]' playlist created successfully with 12 tracks!
 ```
 
 ### What Happens Behind the Scenes
