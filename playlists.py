@@ -1,123 +1,142 @@
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-from spotipy.exceptions import SpotifyException
-from dotenv import load_dotenv
-import os
-import time
+"""DiscograPY CLI for creating Spotify discography playlists."""
+
+import argparse
 import logging
-from typing import List, Dict, Generator, Tuple, Optional, Set
+import os
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from functools import wraps
-from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-# Configure structured logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('spotify_discography.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Set console handler to use utf-8 encoding
-for handler in logging.getLogger().handlers:
-    if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-        # For Windows console compatibility, use 'replace' error handling
-        handler.setStream(open(handler.stream.fileno(), mode='w', encoding='utf-8', errors='replace', closefd=False))
+import spotipy
+from dotenv import load_dotenv
+from spotipy.exceptions import SpotifyException
+from spotipy.oauth2 import SpotifyOAuth
 
 
-def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
-    """Decorator for retrying API calls with exponential backoff.
+def configure_logging(verbose: bool = False) -> logging.Logger:
+    """Configure application logging with file + console handlers."""
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.setLevel(logging.DEBUG)
 
-    Args:
-        max_retries: Maximum number of retry attempts (default: 3)
-        delay: Initial delay in seconds between retries (default: 1.0)
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    Returns:
-        Decorated function that retries on failure with exponential backoff
+    file_handler = logging.FileHandler("spotify_discography.log", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
 
-    Note:
-        - For HTTP 429 (rate limit), uses Retry-After header if available
-        - For other errors, uses exponential backoff: delay * (2 ** attempt)
-    """
-    def decorator(func):
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    _safe_reconfigure_stream(console_handler)
+
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
+
+    return logging.getLogger(__name__)
+
+
+def _safe_reconfigure_stream(handler: logging.StreamHandler) -> None:
+    """Try to enforce UTF-8 console output in a cross-platform safe way."""
+    stream = handler.stream
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError, AttributeError):
+            pass
+
+
+def retry_on_failure(max_retries: int = 3, delay: float = 1.0) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Retry Spotify calls with exponential backoff and 429 handling."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
-                except SpotifyException as e:
-                    if e.http_status == 429:  # Rate limit
-                        retry_after = int(e.headers.get('Retry-After', delay * (2 ** attempt)))
-                        logger.warning(f"Rate limited. Waiting {retry_after} seconds")
+                except SpotifyException as exc:
+                    if exc.http_status == 429:
+                        retry_after_header = (exc.headers or {}).get("Retry-After")
+                        retry_after = int(retry_after_header) if retry_after_header else int(delay * (2**attempt))
+                        logging.getLogger(__name__).warning("Rate limited. Waiting %ss", retry_after)
                         time.sleep(retry_after)
-                    elif attempt == max_retries - 1:
-                        logger.error(f"API call failed after {max_retries} attempts: {e}")
+                        continue
+
+                    if attempt == max_retries - 1:
                         raise
-                    else:
-                        wait_time = delay * (2 ** attempt)
-                        logger.warning(f"API call failed (attempt {attempt + 1}), retrying in {wait_time}s: {e}")
-                        time.sleep(wait_time)
-                except Exception as e:
-                    logger.error(f"Unexpected error in API call: {e}")
-                    raise
-            return None
+
+                    wait_time = delay * (2**attempt)
+                    logging.getLogger(__name__).warning(
+                        "Spotify API failed in %s (attempt %s/%s). Retrying in %.1fs.",
+                        func.__name__,
+                        attempt + 1,
+                        max_retries,
+                        wait_time,
+                    )
+                    time.sleep(wait_time)
+
         return wrapper
+
     return decorator
 
 
-class SpotifyDiscographyCreator:
-    """Optimized Spotify discography playlist creator with robust error handling and performance improvements."""
+class Spinner:
+    """Simple stderr spinner for long-running operations."""
 
-    # Class constants for album type configurations
-    ALBUM_TYPE_CONFIGS = {
-        0: {
-            'types': ['album', 'single', 'compilation'],
-            'suffix': '[EVERYTHING]',
-            'description': 'everything',
-            'filter_func': lambda self, album: True  # Accept all
-        },
-        1: {
-            'types': ['album'],
-            'suffix': '[ALBUMS]',
-            'description': 'albums',
-            'filter_func': lambda self, album: album.get('album_type', '').lower() == 'album'
-        },
-        2: {
-            'types': ['single'],
-            'suffix': '[EPs]',
-            'description': 'EPs',
-            'filter_func': lambda self, album: self._is_ep(album)
-        },
-        3: {
-            'types': ['single'],
-            'suffix': '[SINGLES]',
-            'description': 'singles',
-            'filter_func': lambda self, album: self._is_single(album)
-        },
-        4: {
-            'types': ['album', 'single', 'compilation'],
-            'suffix': '[COMPILATIONS]',
-            'description': 'compilations',
-            'filter_func': lambda self, album: album.get('album_type', '').lower() == 'compilation'
-        },
-        5: {
-            'types': ['single'],
-            'suffix': '[EPs + SINGLES]',
-            'description': 'EPs and singles',
-            'filter_func': lambda self, album: self._is_ep(album) or self._is_single(album)
-        },
-        6: {
-            'types': ['album', 'single'],
-            'suffix': '[ALBUMS + EPs + SINGLES]',
-            'description': 'albums, EPs, and singles',
-            'filter_func': lambda self, album: (
-                album.get('album_type', '').lower() == 'album' or 
-                self._is_ep(album) or 
-                self._is_single(album)
-            )
-        }
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def __enter__(self) -> "Spinner":
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        sys.stderr.write("\r" + " " * 80 + "\r")
+        sys.stderr.flush()
+
+    def _run(self) -> None:
+        frames = ["|", "/", "-", "\\"]
+        idx = 0
+        while not self._stop.is_set():
+            sys.stderr.write(f"\r{frames[idx % len(frames)]} {self.message}")
+            sys.stderr.flush()
+            idx += 1
+            time.sleep(0.1)
+
+
+@dataclass
+class RunSummary:
+    artist: str
+    playlist_name: str
+    playlist_id: Optional[str]
+    albums_included: int
+    tracks_added: int
+    dry_run: bool
+
+
+class SpotifyDiscographyCreator:
+    """Spotify discography playlist creator with filtering and robust error handling."""
+
+    ALBUM_TYPE_CONFIGS: Dict[int, Dict[str, Any]] = {
+        0: {"types": ["album", "single", "compilation"], "suffix": "[EVERYTHING]", "description": "everything"},
+        1: {"types": ["album"], "suffix": "[ALBUMS]", "description": "albums"},
+        2: {"types": ["single"], "suffix": "[EPs]", "description": "EPs"},
+        3: {"types": ["single"], "suffix": "[SINGLES]", "description": "singles"},
+        4: {"types": ["album", "single", "compilation"], "suffix": "[COMPILATIONS]", "description": "compilations"},
+        5: {"types": ["single"], "suffix": "[EPs + SINGLES]", "description": "EPs and singles"},
+        6: {"types": ["album", "single"], "suffix": "[ALBUMS + EPs + SINGLES]", "description": "albums, EPs, and singles"},
     }
 
     PLAYLIST_DESCRIPTION = (
@@ -125,100 +144,74 @@ class SpotifyDiscographyCreator:
         "Find the project at: https://github.com/based-on-what/discograpy"
     )
 
-    def __init__(self):
-        """Initialize Spotify client with authentication."""
+    def __init__(self, logger: logging.Logger, dry_run: bool = False) -> None:
+        self.logger = logger
+        self.dry_run = dry_run
+        self.user_id: Optional[str] = None
+
         load_dotenv()
         self._setup_spotify_client()
-        self.user_id = None
 
     def _setup_spotify_client(self) -> None:
-        """Setup Spotify client with proper error handling."""
-        try:
-            auth = SpotifyOAuth(
-                client_id=os.getenv('SPOTIPY_CLIENT_ID'),
-                client_secret=os.getenv('SPOTIPY_CLIENT_SECRET'),
-                redirect_uri=os.getenv('SPOTIPY_REDIRECT_URI'),
-                scope="playlist-modify-public"
-            )
-            self.sp = spotipy.Spotify(auth_manager=auth)
-            logger.info("Spotify client initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize Spotify client: {e}")
-            raise
+        client_id = os.getenv("SPOTIPY_CLIENT_ID")
+        client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
+        redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI")
 
-    def _is_ep(self, album: Dict) -> bool:
-        """Determine if an album is an EP based on track count.
-        
-        Args:
-            album: Album dictionary from Spotify API
-            
-        Returns:
-            True if album is an EP (4-7 tracks and album_type is 'single')
-        """
-        album_type = album.get('album_type', '').lower()
-        total_tracks = album.get('total_tracks', 0)
-        return album_type == 'single' and 4 <= total_tracks <= 7
+        missing = [name for name, value in {
+            "SPOTIPY_CLIENT_ID": client_id,
+            "SPOTIPY_CLIENT_SECRET": client_secret,
+            "SPOTIPY_REDIRECT_URI": redirect_uri,
+        }.items() if not value]
 
-    def _is_single(self, album: Dict) -> bool:
-        """Determine if an album is a single based on track count.
-        
-        Args:
-            album: Album dictionary from Spotify API
-            
-        Returns:
-            True if album is a single (1-3 tracks and album_type is 'single')
-        """
-        album_type = album.get('album_type', '').lower()
-        total_tracks = album.get('total_tracks', 0)
-        return album_type == 'single' and total_tracks <= 3
+        if missing:
+            raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
+
+        # Keep both public and private playlist scopes for future flexibility.
+        scope = "playlist-modify-public playlist-modify-private"
+        auth = SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            cache_path=".spotify_cache",
+            open_browser=True,
+        )
+        self.sp = spotipy.Spotify(auth_manager=auth)
+        self.logger.info("Spotify client initialized successfully")
+
+    @staticmethod
+    def _supports_color() -> bool:
+        return sys.stdout.isatty() and os.getenv("NO_COLOR") is None and os.getenv("TERM") != "dumb"
+
+    def _print_header(self) -> None:
+        title = "DiscograPY - Spotify Discography Playlist Creator"
+        if self._supports_color():
+            color = "\033[96m"
+            reset = "\033[0m"
+        else:
+            color = ""
+            reset = ""
+        border = "╔" + "═" * (len(title) + 2) + "╗"
+        line = f"║ {title} ║"
+        bottom = "╚" + "═" * (len(title) + 2) + "╝"
+        print(f"{color}{border}\n{line}\n{bottom}{reset}")
 
     def _display_menu(self, title: str, options: List[str]) -> None:
-        """Display a formatted menu with title and options.
-        
-        Args:
-            title: Menu title
-            options: List of menu option strings
-        """
         print(f"\n=== {title} ===")
-        for i, option in enumerate(options):
-            print(f"{i}: {option}")
+        for idx, option in enumerate(options):
+            print(f"{idx}: {option}")
 
     def _get_numeric_input(self, prompt: str, min_val: int, max_val: int) -> int:
-        """Get validated numeric input from user within a range.
-        
-        Args:
-            prompt: Input prompt to display
-            min_val: Minimum valid value (inclusive)
-            max_val: Maximum valid value (inclusive)
-            
-        Returns:
-            Valid integer input from user
-            
-        Raises:
-            KeyboardInterrupt: If user cancels input
-        """
         while True:
             try:
                 value = int(input(prompt))
                 if min_val <= value <= max_val:
                     return value
-                else:
-                    print(f"Please select a valid number between {min_val} and {max_val}.")
+                print(f"Please select a valid number between {min_val} and {max_val}.")
             except ValueError:
                 print("Please enter a valid number.")
-            except KeyboardInterrupt:
-                logger.info("User cancelled input")
-                raise
 
     def display_album_type_menu(self) -> int:
-        """Display album type selection menu and get user choice.
-
-        Returns:
-            Integer representing the user's album type selection (0-6)
-
-        Raises:
-            KeyboardInterrupt: If user cancels the selection
-        """
         options = [
             "Everything (all album types combined)",
             "Albums only",
@@ -226,622 +219,338 @@ class SpotifyDiscographyCreator:
             "Singles only",
             "Compilations only",
             "EPs + Singles",
-            "Albums + EPs + Singles"
+            "Albums + EPs + Singles",
         ]
-        
         self._display_menu("Album Type Selection", options)
-        selection = self._get_numeric_input("\nSelect album type (0-6): ", 0, 6)
-        logger.info(f"Selected album type option: {selection}")
-        return selection
+        return self._get_numeric_input("\nSelect album type (0-6): ", 0, 6)
 
     def get_album_types_from_selection(self, selection: int) -> List[str]:
-        """Convert user selection to Spotify album type parameters.
-
-        Args:
-            selection: Integer representing user's choice (0-6)
-
-        Returns:
-            List of album type strings for Spotify API
-        """
-        config = self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])
-        return config['types']
-
-    def get_playlist_suffix_from_selection(self, selection: int, actual_types: Optional[Set[str]] = None) -> str:
-        """Get playlist name suffix based on album type selection and actual content.
-
-        Args:
-            selection: Integer representing user's choice (0-6)
-            actual_types: Optional set of actual album types found (for mixed selections)
-
-        Returns:
-            String suffix for playlist name adjusted for actual content
-        """
-        config = self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])
-        
-        # If no actual_types provided, return the default suffix
-        if actual_types is None:
-            return config['suffix']
-        
-        # For mixed selections, adjust suffix based on what was actually found
-        if selection in [5, 6]:  # Mixed selections
-            has_albums = 'album' in actual_types
-            has_eps = 'ep' in actual_types
-            has_singles = 'single' in actual_types
-            
-            if selection == 5:  # EPs + Singles
-                if has_eps and has_singles:
-                    return '[EPs + SINGLES]'
-                elif has_eps:
-                    return '[EPs]'
-                elif has_singles:
-                    return '[SINGLES]'
-            elif selection == 6:  # Albums + EPs + Singles
-                parts = []
-                if has_albums:
-                    parts.append('ALBUMS')
-                if has_eps:
-                    parts.append('EPs')
-                if has_singles:
-                    parts.append('SINGLES')
-                
-                if parts:
-                    return f"[{' + '.join(parts)}]"
-        
-        return config['suffix']
+        return self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])["types"]
 
     def get_selection_description(self, selection: int) -> str:
-        """Get human-readable description of the selection.
+        return self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])["description"]
 
-        Args:
-            selection: Integer representing user's choice (0-6)
-
-        Returns:
-            String description of the selection
-        """
+    def get_playlist_suffix_from_selection(self, selection: int, actual_types: Optional[Set[str]] = None) -> str:
         config = self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])
-        return config['description']
+        if actual_types is None:
+            return config["suffix"]
 
-    def filter_albums_by_selection(self, albums: List[Dict], selection: int) -> Tuple[List[Dict], Set[str]]:
-        """Filter albums based on user's selection.
+        if selection == 5:
+            if {"ep", "single"}.issubset(actual_types):
+                return "[EPs + SINGLES]"
+            if "ep" in actual_types:
+                return "[EPs]"
+            if "single" in actual_types:
+                return "[SINGLES]"
 
-        Args:
-            albums: List of album dictionaries
-            selection: Integer representing user's choice (0-6)
+        if selection == 6:
+            parts: List[str] = []
+            if "album" in actual_types:
+                parts.append("ALBUMS")
+            if "ep" in actual_types:
+                parts.append("EPs")
+            if "single" in actual_types:
+                parts.append("SINGLES")
+            if parts:
+                return f"[{' + '.join(parts)}]"
 
-        Returns:
-            Tuple of (filtered albums list, set of actual types found)
-        """
-        config = self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])
-        filter_func = config['filter_func']
-        
-        filtered = [album for album in albums if filter_func(self, album)]
-        
-        # Determine actual types found for mixed selections
-        actual_types = set()
+        return config["suffix"]
+
+    def _is_ep(self, album: Dict[str, Any]) -> bool:
+        return album.get("album_type", "").lower() == "single" and 4 <= album.get("total_tracks", 0) <= 7
+
+    def _is_single(self, album: Dict[str, Any]) -> bool:
+        return album.get("album_type", "").lower() == "single" and album.get("total_tracks", 0) <= 3
+
+    def _matches_selection_filter(self, album: Dict[str, Any], selection: int) -> bool:
+        album_type = album.get("album_type", "").lower()
+        if selection == 0:
+            return True
+        if selection == 1:
+            return album_type == "album"
+        if selection == 2:
+            return self._is_ep(album)
+        if selection == 3:
+            return self._is_single(album)
+        if selection == 4:
+            return album_type == "compilation"
+        if selection == 5:
+            return self._is_ep(album) or self._is_single(album)
+        if selection == 6:
+            return album_type == "album" or self._is_ep(album) or self._is_single(album)
+        return True
+
+    def filter_albums_by_selection(self, albums: List[Dict[str, Any]], selection: int) -> Tuple[List[Dict[str, Any]], Set[str]]:
+        filtered = [album for album in albums if self._matches_selection_filter(album, selection)]
+        actual_types: Set[str] = set()
         for album in filtered:
-            album_type = album.get('album_type', '').lower()
-            if album_type == 'album':
-                actual_types.add('album')
+            album_type = album.get("album_type", "").lower()
+            if album_type == "album":
+                actual_types.add("album")
             elif self._is_ep(album):
-                actual_types.add('ep')
+                actual_types.add("ep")
             elif self._is_single(album):
-                actual_types.add('single')
-            elif album_type == 'compilation':
-                actual_types.add('compilation')
-        
+                actual_types.add("single")
+            elif album_type == "compilation":
+                actual_types.add("compilation")
         return filtered, actual_types
 
     def _check_missing_types_and_warn(self, selection: int, actual_types: Set[str]) -> None:
-        """Check for missing album types in mixed selections and warn user.
-        
-        Args:
-            selection: Integer representing user's choice (0-6)
-            actual_types: Set of actual album types found
-        """
-        # Only check for mixed selections
-        if selection == 5:  # EPs + Singles
-            expected = {'ep', 'single'}
-            missing = expected - actual_types
-            if missing:
-                missing_str = ' and '.join(m.upper() + 's' if m != 'ep' else 'EPs' for m in missing)
-                print(f"\n⚠ Warning: {missing_str} not found on Spotify for this artist.")
-                print("Using available types instead.")
-                logger.warning(f"Missing types for selection {selection}: {missing}")
-        
-        elif selection == 6:  # Albums + EPs + Singles
-            expected = {'album', 'ep', 'single'}
-            missing = expected - actual_types
-            if missing:
-                missing_names = []
-                for m in missing:
-                    if m == 'album':
-                        missing_names.append('Albums')
-                    elif m == 'ep':
-                        missing_names.append('EPs')
-                    elif m == 'single':
-                        missing_names.append('Singles')
-                
-                missing_str = ', '.join(missing_names)
-                print(f"\n⚠ Warning: {missing_str} not found on Spotify for this artist.")
-                print("Using available types instead.")
-                logger.warning(f"Missing types for selection {selection}: {missing}")
+        expected_map = {5: {"ep", "single"}, 6: {"album", "ep", "single"}}
+        expected = expected_map.get(selection)
+        if not expected:
+            return
+        missing = expected - actual_types
+        if not missing:
+            return
 
-    def handle_no_content_found(self, artist_name: str, selection: int) -> int:
-        """Handle the case when no content is found for the selected criteria.
-
-        Args:
-            artist_name: Name of the artist
-            selection: Integer representing user's album type choice (0-6)
-
-        Returns:
-            0 to retry with different artist, 1 to retry with different album type
-
-        Raises:
-            KeyboardInterrupt: If user cancels the selection
-        """
-        selection_description = self.get_selection_description(selection)
-        print(f"\nNo {selection_description} found for this artist on Spotify.")
-        
-        options = [
-            "Try with a different artist",
-            "Try with a different album type selection"
-        ]
-        
-        self._display_menu("Options", options)
-        choice = self._get_numeric_input("\nSelect option (0-1): ", 0, 1)
-        
-        logger.info(f"User chose option {choice} after no content found")
-        return choice
+        map_name = {"album": "Albums", "ep": "EPs", "single": "Singles"}
+        missing_text = ", ".join(map_name[item] for item in sorted(missing))
+        print(f"\n⚠ Warning: {missing_text} not found on Spotify for this artist.")
+        print("Using available types instead.")
 
     @retry_on_failure(max_retries=3)
-    def _paginate_spotify_results(self, initial_results: Dict, items_key: str = 'items') -> List[Dict]:
-        """Generic pagination handler for Spotify API results.
-        
-        Args:
-            initial_results: Initial API response containing items and pagination info
-            items_key: Key name for items in the response (default: 'items')
-            
-        Returns:
-            List of all items from paginated results
-            
-        Raises:
-            Exception: If pagination fails after retries
-        """
+    def _paginate_spotify_results(self, initial_results: Dict[str, Any], items_key: str = "items") -> List[Dict[str, Any]]:
         if not initial_results:
-            logger.warning("Empty initial results provided to pagination handler")
             return []
-        
-        # Handle nested results (e.g., search results have 'artists': {'items': ...})
-        if items_key not in initial_results:
-            # Try to find the items in nested structure
-            for key in initial_results:
-                if isinstance(initial_results[key], dict) and items_key in initial_results[key]:
-                    initial_results = initial_results[key]
-                    break
-        
-        if items_key not in initial_results:
-            logger.warning(f"No '{items_key}' key found in results")
-            return []
-        
-        all_items = list(initial_results[items_key])
+
         results = initial_results
-        
-        # Continue pagination
-        while results.get('next'):
-            try:
-                results = self.sp.next(results)
-                if results and items_key in results:
-                    all_items.extend(results[items_key])
-                else:
-                    logger.warning("Invalid pagination response received")
+        if items_key not in results:
+            for key, value in initial_results.items():
+                if isinstance(value, dict) and items_key in value:
+                    results = value
                     break
-            except Exception as e:
-                logger.error(f"Error during pagination: {e}")
-                raise
-        
-        logger.debug(f"Paginated {len(all_items)} total items")
+
+        if items_key not in results:
+            return []
+
+        all_items = list(results.get(items_key, []))
+        while results.get("next"):
+            next_page = self.sp.next(results)
+            if not next_page:
+                break
+            all_items.extend(next_page.get(items_key, []))
+            results = next_page
         return all_items
 
-    def search_artists(self, artist_name: str) -> List[Dict]:
-        """Search for artists with improved error handling and memory optimization.
-
-        Args:
-            artist_name: Name of the artist to search for
-
-        Returns:
-            List of artist dictionaries matching the search query
-
-        Raises:
-            ValueError: If artist_name is empty
-            Exception: If search fails after retries
-        """
-        if not artist_name or not artist_name.strip():
+    def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
+        if not artist_name.strip():
             raise ValueError("Artist name cannot be empty")
+        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=50)
+        return self._paginate_spotify_results(results, "items")
 
-        logger.info(f"Searching for artist: {artist_name}")
-
-        try:
-            results = self.sp.search(q=f'artist:{artist_name}', type='artist', limit=50)
-            
-            if not results or 'artists' not in results:
-                logger.warning("Invalid search response received")
-                return []
-            
-            # Use generic pagination handler
-            artists = self._paginate_spotify_results(results, 'items')
-
-            if not artists:
-                logger.info("No artists found with that name")
-                return []
-
-            logger.info(f"Found {len(artists)} artists")
-            return artists
-
-        except Exception as e:
-            logger.error(f"Failed to search artists: {e}")
-            raise
-
-    def display_artists(self, artists: List[Dict]) -> None:
-        """Display found artists to user.
-
-        Args:
-            artists: List of artist dictionaries to display
-        """
+    def display_artists(self, artists: List[Dict[str, Any]]) -> None:
         print(f"\nFound {len(artists)} artists:")
-        for i, artist in enumerate(artists, 1):
-            print(f"{i}. {artist['name']}")
+        for idx, artist in enumerate(artists, 1):
+            followers = artist.get("followers", {}).get("total", 0)
+            genres = ", ".join(artist.get("genres", [])[:3]) or "n/a"
+            print(f"{idx}. {artist.get('name', 'Unknown')} | Followers: {followers} | Genres: {genres}")
 
-    def select_artist(self, artists: List[Dict]) -> Tuple[str, str]:
-        """Handle artist selection with robust input validation.
-
-        Args:
-            artists: List of artist dictionaries to choose from
-
-        Returns:
-            Tuple of (artist_id, artist_name) for the selected artist
-
-        Raises:
-            KeyboardInterrupt: If user cancels the selection
-        """
-        selection = self._get_numeric_input(
-            f"\nSelect artist number (1-{len(artists)}): ",
-            1,
-            len(artists)
-        )
-        
-        selected_artist = artists[selection - 1]
-        artist_id = selected_artist['id']
-        artist_name = selected_artist['name']
-        logger.info(f"Selected artist: {artist_name} (ID: {artist_id})")
-        return artist_id, artist_name
+    def select_artist(self, artists: List[Dict[str, Any]]) -> Tuple[str, str]:
+        selection = self._get_numeric_input(f"\nSelect artist number (1-{len(artists)}): ", 1, len(artists))
+        selected = artists[selection - 1]
+        return selected["id"], selected["name"]
 
     def handle_no_artists_found(self) -> bool:
-        """Handle the case when no artists are found.
-
-        Returns:
-            True if user wants to retry, False if user wants to exit
-
-        Raises:
-            KeyboardInterrupt: If user cancels the selection
-        """
         print("\nNo artists found with that name.")
-        
-        options = [
-            "Try another artist search",
-            "Exit"
-        ]
-        
-        self._display_menu("Options", options)
-        choice = self._get_numeric_input("\nSelect option (0-1): ", 0, 1)
-        
-        if choice == 0:
-            logger.info("User chose to retry artist search")
-            return True
-        else:
-            logger.info("User chose to exit")
-            return False
+        self._display_menu("Options", ["Try another artist search", "Exit"])
+        return self._get_numeric_input("\nSelect option (0-1): ", 0, 1) == 0
 
     @retry_on_failure(max_retries=3)
-    def _get_artist_albums(self, artist_id: str, album_types: List[str]) -> List[Dict]:
-        """Get all albums for an artist with pagination and validation.
-
-        Args:
-            artist_id: Spotify artist ID
-            album_types: List of album types to retrieve
-
-        Returns:
-            List of album dictionaries sorted by release date
-
-        Raises:
-            Exception: If album retrieval fails after retries
-        """
-        try:
-            album_type_str = ','.join(album_types)
-            results = self.sp.artist_albums(artist_id, album_type=album_type_str, limit=50)
-
-            if not results or 'items' not in results:
-                logger.warning("Invalid album search response")
-                return []
-
-            # Use generic pagination handler
-            albums = self._paginate_spotify_results(results, 'items')
-
-            # Filter out invalid albums and sort by release date
-            valid_albums = [album for album in albums if album.get('release_date')]
-            valid_albums.sort(key=lambda album: album['release_date'])
-
-            logger.info(f"Retrieved {len(valid_albums)} albums for artist {artist_id}")
-            return valid_albums
-
-        except Exception as e:
-            logger.error(f"Failed to get artist albums: {e}")
-            raise
+    def _get_artist_albums(self, artist_id: str, album_types: List[str]) -> List[Dict[str, Any]]:
+        include_groups = ",".join(album_types)
+        results = self.sp.artist_albums(artist_id=artist_id, include_groups=include_groups, limit=50)
+        albums = self._paginate_spotify_results(results, "items")
+        valid = [album for album in albums if album.get("release_date")]
+        valid.sort(key=lambda item: item["release_date"])
+        return valid
 
     @retry_on_failure(max_retries=3)
-    def _get_album_tracks(self, album_uri: str) -> List[str]:
-        """Get all tracks from an album with pagination.
+    def _get_album_tracks(self, album_id: str) -> List[Dict[str, Any]]:
+        results = self.sp.album_tracks(album_id=album_id, limit=50)
+        return self._paginate_spotify_results(results, "items")
 
-        Args:
-            album_uri: Spotify album URI
-
-        Returns:
-            List of track URIs from the album
-
-        Note:
-            Returns empty list on error instead of raising exception
-            to prevent failure of entire discography process
-        """
-        try:
-            results = self.sp.album_tracks(album_uri)
-
-            if not results or 'items' not in results:
-                logger.warning(f"Invalid album tracks response for {album_uri}")
-                return []
-
-            # Use generic pagination handler
-            tracks = self._paginate_spotify_results(results, 'items')
-            
-            # Extract URIs from track objects
-            track_uris = [track['uri'] for track in tracks if track and track.get('uri')]
-
-            return track_uris
-
-        except Exception as e:
-            logger.error(f"Failed to get album tracks for {album_uri}: {e}")
-            return []  # Return empty list instead of failing entire process
-
-    def _get_album_tracks_threaded(self, albums: List[Dict]) -> List[str]:
-        """Get tracks from all albums using threading for better performance.
-
-        Args:
-            albums: List of album dictionaries containing 'uri' and 'name' keys
-
-        Returns:
-            List of track URIs in the same order as the input albums
-        """
-        all_track_uris = []
-
-        # Use ThreadPoolExecutor for concurrent album processing
-        with ThreadPoolExecutor(max_workers=5) as executor:  # Limit concurrent requests
-            # Submit all album track requests and maintain order with a list
-            futures = [
-                executor.submit(self._get_album_tracks, album['uri'])
+    def _collect_tracks_from_albums(self, albums: List[Dict[str, Any]], verbose: bool = False) -> List[str]:
+        all_track_uris: List[str] = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_map = {
+                executor.submit(self._get_album_tracks, album["id"]): album
                 for album in albums
-            ]
+                if album.get("id")
+            }
 
-            # Process results in order to maintain album chronology
-            for i, future in enumerate(futures):
-                try:
-                    track_uris = future.result(timeout=30)  # 30 second timeout
-                    all_track_uris.extend(track_uris)
-                    logger.info(f"Processed album: {albums[i]['name']} ({len(track_uris)} tracks)")
-                except Exception as e:
-                    logger.error(f"Failed to process album {albums[i]['name']}: {e}")
+            ordered_results: List[Tuple[str, str, List[Dict[str, Any]]]] = []
+            for future in as_completed(future_map):
+                album = future_map[future]
+                tracks = future.result()
+                ordered_results.append((album.get("release_date", ""), album.get("name", "Unknown"), tracks))
+
+            ordered_results.sort(key=lambda item: item[0])
+
+            for _, album_name, tracks in ordered_results:
+                track_uris = [track["uri"] for track in tracks if track.get("uri")]
+                all_track_uris.extend(track_uris)
+                self.logger.info("Processed album: %s (%s tracks)", album_name, len(track_uris))
 
         return all_track_uris
 
     @retry_on_failure(max_retries=3)
-    def _create_playlist(self, playlist_name: str, description: str) -> Dict:
-        """Create playlist with error handling.
-
-        Args:
-            playlist_name: Name for the new playlist
-            description: Description for the new playlist
-
-        Returns:
-            Playlist dictionary containing 'id' and other metadata
-
-        Raises:
-            ValueError: If user info or playlist creation fails
-            Exception: If playlist creation fails after retries
-        """
-        try:
-            if not self.user_id:
-                user_info = self.sp.current_user()
-                if not user_info or 'id' not in user_info:
-                    raise ValueError("Unable to get current user information")
-                self.user_id = user_info['id']
-
-            playlist = self.sp.user_playlist_create(
-                user=self.user_id,
-                name=playlist_name,
-                public=True,
-                description=description
-            )
-
-            if not playlist or 'id' not in playlist:
-                raise ValueError("Invalid playlist creation response")
-
-            logger.info(f"Created playlist: {playlist_name} (ID: {playlist['id']})")
-            return playlist
-
-        except Exception as e:
-            logger.error(f"Failed to create playlist: {e}")
-            raise
+    def _create_playlist(self, playlist_name: str, description: str) -> Dict[str, Any]:
+        if not self.user_id:
+            current_user = self.sp.current_user()
+            if not current_user or "id" not in current_user:
+                raise ValueError("Unable to identify the authenticated Spotify user.")
+            self.user_id = current_user["id"]
+        return self.sp.user_playlist_create(user=self.user_id, name=playlist_name, public=True, description=description)
 
     @retry_on_failure(max_retries=3)
     def _add_tracks_to_playlist(self, playlist_id: str, track_uris: List[str]) -> None:
-        """Add tracks to playlist in batches with error handling.
+        batch_size = 100
+        for start in range(0, len(track_uris), batch_size):
+            batch = track_uris[start : start + batch_size]
+            self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
 
-        Args:
-            playlist_id: Spotify playlist ID
-            track_uris: List of track URIs to add
+    def _spotify_error_message(self, exc: SpotifyException) -> str:
+        messages = {
+            400: "Bad request sent to Spotify API. Check the selected artist/content and try again.",
+            401: "Authentication failed or token expired. Re-authenticate and retry.",
+            403: "Insufficient permissions. Verify OAuth scopes and app settings.",
+            404: "Resource not found on Spotify.",
+            429: "Rate limit reached. Please wait and run the command again.",
+            500: "Spotify service error. Please retry in a moment.",
+            502: "Spotify temporary gateway error. Please retry.",
+            503: "Spotify service unavailable. Please retry later.",
+        }
+        return messages.get(exc.http_status, f"Spotify API error ({exc.http_status}): {exc}")
 
-        Note:
-            Automatically handles Spotify's 100-track batch limit
+    def _print_summary(self, summary: RunSummary) -> None:
+        playlist_url = (
+            f"https://open.spotify.com/playlist/{summary.playlist_id}"
+            if summary.playlist_id
+            else "n/a (dry-run)"
+        )
+        rows = [
+            ("Artist", summary.artist),
+            ("Playlist", summary.playlist_name),
+            ("Albums included", str(summary.albums_included)),
+            ("Tracks added", str(summary.tracks_added)),
+            ("Playlist URL", playlist_url),
+        ]
 
-        Raises:
-            Exception: If any batch fails to add after retries
-        """
-        if not track_uris:
-            logger.warning("No tracks to add to playlist")
-            return
+        key_width = max(len(k) for k, _ in rows)
+        print("\nSummary")
+        print("-" * (key_width + 40))
+        for key, value in rows:
+            print(f"{key:<{key_width}} : {value}")
+        print("-" * (key_width + 40))
 
-        batch_size = 100  # Spotify API limit
-        total_batches = (len(track_uris) + batch_size - 1) // batch_size
+    def create_discography_playlist(self, verbose: bool = False) -> None:
+        self._print_header()
 
-        for i, batch_start in enumerate(range(0, len(track_uris), batch_size)):
-            batch = track_uris[batch_start:batch_start + batch_size]
-            try:
-                self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
-                logger.info(f"Added batch {i + 1}/{total_batches} ({len(batch)} tracks)")
-            except Exception as e:
-                logger.error(f"Failed to add batch {i + 1}: {e}")
-                raise
+        while True:
+            artist_name_input = input("\nEnter artist name: ").strip()
+            if not artist_name_input:
+                print("Artist name cannot be empty.")
+                continue
 
-    def create_discography_playlist(self) -> None:
-        """Main method to create discography playlist with full error handling.
+            with Spinner("Searching artists..."):
+                artists = self.search_artists(artist_name_input)
 
-        This method orchestrates the entire workflow:
-        1. Prompts user for artist name
-        2. Searches and displays matching artists
-        3. Allows user to select the correct artist
-        4. Prompts user for album type selection
-        5. Fetches all albums sorted by release date
-        6. Filters albums based on user selection
-        7. Handles missing album types appropriately
-        8. Creates a new playlist with description
-        9. Fetches all tracks from albums (parallelized)
-        10. Adds tracks to the playlist in batches
-
-        Raises:
-            KeyboardInterrupt: If user cancels the process
-            Exception: For any unrecoverable errors
-        """
-        try:
-            artist_id = None
-            selected_artist_name = None
-            
-            # Artist selection loop
-            while True:
-                # Get artist name
-                artist_name = input("\nEnter artist name: ").strip()
-                if not artist_name:
-                    print("Artist name cannot be empty.")
+            if not artists:
+                if self.handle_no_artists_found():
                     continue
-
-                # Search for artists
-                artists = self.search_artists(artist_name)
-                if not artists:
-                    # Handle no artists found with retry option
-                    if not self.handle_no_artists_found():
-                        return
-                    continue  # Retry artist search
-                
-                # Display and select artist
-                self.display_artists(artists)
-                artist_id, selected_artist_name = self.select_artist(artists)
-                break
-
-            # Album type and content loop
-            while True:
-                # Get album type selection
-                album_type_selection = self.display_album_type_menu()
-                album_types = self.get_album_types_from_selection(album_type_selection)
-
-                # Get albums
-                logger.info("Retrieving artist albums...")
-                print("\nRetrieving albums...")
-                albums = self._get_artist_albums(artist_id, album_types)
-                
-                # Filter albums based on selection
-                filtered_albums, actual_types = self.filter_albums_by_selection(albums, album_type_selection)
-                
-                if not filtered_albums:
-                    # No content found for this selection
-                    logger.warning(f"No content found for selection: {self.get_selection_description(album_type_selection)}")
-                    retry_choice = self.handle_no_content_found(selected_artist_name, album_type_selection)
-                    
-                    if retry_choice == 0:  # Try another artist
-                        # Reset and go back to artist selection
-                        artist_id = None
-                        selected_artist_name = None
-                        # Restart the entire process
-                        self.create_discography_playlist()
-                        return
-                    elif retry_choice == 1:  # Try another album type
-                        continue  # Continue to album type selection
-                else:
-                    # Content found
-                    # For mixed selections, check if any types are missing and warn
-                    if album_type_selection in [5, 6]:
-                        self._check_missing_types_and_warn(album_type_selection, actual_types)
-                    
-                    # Adjust playlist suffix based on actual content found
-                    playlist_suffix = self.get_playlist_suffix_from_selection(
-                        album_type_selection, 
-                        actual_types if album_type_selection in [5, 6] else None
-                    )
-                    
-                    break
-
-            # Create playlist with description
-            playlist_name = f"{selected_artist_name} discography {playlist_suffix}"
-            playlist = self._create_playlist(playlist_name, self.PLAYLIST_DESCRIPTION)
-            print(f"\nCreated playlist: {playlist_name}")
-
-            # Get all tracks using threading for better performance
-            logger.info("Retrieving album tracks...")
-            print("Retrieving tracks from albums...")
-            track_uris = self._get_album_tracks_threaded(filtered_albums)
-
-            if not track_uris:
-                print("No tracks found to add to playlist.")
-                logger.warning("No tracks retrieved from albums")
                 return
 
-            # Add tracks to playlist
-            logger.info(f"Adding {len(track_uris)} tracks to playlist...")
-            print(f"Adding {len(track_uris)} tracks to playlist...")
-            self._add_tracks_to_playlist(playlist['id'], track_uris)
+            self.display_artists(artists)
+            artist_id, selected_artist_name = self.select_artist(artists)
 
-            print(f"\n✓ '{playlist_name}' playlist created successfully with {len(track_uris)} tracks!")
-            logger.info(f"Successfully created playlist with {len(track_uris)} tracks")
+            while True:
+                album_type_selection = self.display_album_type_menu()
 
+                album_types = self.get_album_types_from_selection(album_type_selection)
+                with Spinner("Retrieving albums..."):
+                    albums = self._get_artist_albums(artist_id, album_types)
+
+                filtered_albums, actual_types = self.filter_albums_by_selection(albums, album_type_selection)
+
+                if verbose:
+                    for album in filtered_albums:
+                        year = str(album.get("release_date", ""))[:4] or "n/a"
+                        self.logger.debug("Album selected: %s (%s)", album.get("name", "Unknown"), year)
+
+                if not filtered_albums:
+                    print(f"\nNo {self.get_selection_description(album_type_selection)} found for this artist with current filters.")
+                    self._display_menu("Options", ["Try with a different artist", "Try with a different album type selection"])
+                    retry_choice = self._get_numeric_input("\nSelect option (0-1): ", 0, 1)
+                    if retry_choice == 0:
+                        break
+                    continue
+
+                if album_type_selection in (5, 6):
+                    self._check_missing_types_and_warn(album_type_selection, actual_types)
+
+                suffix = self.get_playlist_suffix_from_selection(
+                    album_type_selection,
+                    actual_types if album_type_selection in (5, 6) else None,
+                )
+                playlist_name = f"{selected_artist_name} discography {suffix}"
+
+                with Spinner("Collecting tracks..."):
+                    track_uris = self._collect_tracks_from_albums(filtered_albums, verbose=verbose)
+
+                if not track_uris:
+                    print("No tracks found to process with the current filters.")
+                    return
+
+                playlist_id: Optional[str] = None
+                if self.dry_run:
+                    print("\nDry-run enabled: playlist will not be created and tracks will not be uploaded.")
+                else:
+                    with Spinner("Creating playlist..."):
+                        playlist = self._create_playlist(playlist_name, self.PLAYLIST_DESCRIPTION)
+                        playlist_id = playlist.get("id")
+
+                    with Spinner("Adding tracks to playlist..."):
+                        self._add_tracks_to_playlist(playlist_id, track_uris)
+
+                summary = RunSummary(
+                    artist=selected_artist_name,
+                    playlist_name=playlist_name,
+                    playlist_id=playlist_id,
+                    albums_included=len(filtered_albums),
+                    tracks_added=len(track_uris),
+                    dry_run=self.dry_run,
+                )
+                self._print_summary(summary)
+                return
+
+    def run(self, verbose: bool = False) -> None:
+        try:
+            self.create_discography_playlist(verbose=verbose)
+        except SpotifyException as exc:
+            message = self._spotify_error_message(exc)
+            self.logger.error("Spotify API error: %s", exc)
+            print(f"\n✗ {message}")
+        except EnvironmentError as exc:
+            self.logger.error("Environment configuration error: %s", exc)
+            print(f"\n✗ {exc}")
         except KeyboardInterrupt:
-            logger.info("Process interrupted by user")
+            self.logger.info("Process interrupted by user")
             print("\n\nProcess cancelled by user.")
-        except Exception as e:
-            logger.error(f"Failed to create discography playlist: {e}", exc_info=True)
-            print(f"\n✗ An error occurred: {e}")
-            print("Check spotify_discography.log for details.")
-            raise
 
 
-def main():
-    """Main entry point with error handling."""
-    try:
-        print("=" * 60)
-        print("DiscograPY - Spotify Discography Playlist Creator")
-        print("=" * 60)
-        
-        creator = SpotifyDiscographyCreator()
-        creator.create_discography_playlist()
-    except KeyboardInterrupt:
-        print("\n\nExiting...")
-    except Exception as e:
-        logger.error(f"Application failed: {e}", exc_info=True)
-        print("\n✗ Application encountered an error. Check logs for details.")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Create a Spotify playlist from an artist discography.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug logging on console.")
+    parser.add_argument("--dry-run", action="store_true", help="Run discovery and filtering without creating a playlist.")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    logger = configure_logging(verbose=args.verbose)
+    creator = SpotifyDiscographyCreator(logger=logger, dry_run=args.dry_run)
+    creator.run(verbose=args.verbose)
 
 
 if __name__ == "__main__":
