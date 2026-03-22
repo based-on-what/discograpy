@@ -89,21 +89,26 @@
         box-shadow: 0 0 14px rgba(57, 255, 20, 0.65);
       }
 
-      .options-inline {
-        margin-top: 16px;
+      .result-actions {
         display: flex;
-        flex-wrap: wrap;
-        gap: 18px;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 14px;
+        align-items: flex-start;
       }
-      .option-row {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
+      .embed-wrap {
+        width: 100%;
+        max-width: 680px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 0 10px rgba(57, 255, 20, 0.18);
       }
-      .option-row input[type="checkbox"] {
-        width: 16px;
-        height: 16px;
-        margin: 0;
+      .embed-wrap iframe {
+        width: 100%;
+        min-height: 352px;
+        border: 0;
+        display: block;
       }
 
       .hidden { display: none; }
@@ -153,12 +158,6 @@
         <h3>Playlist type</h3>
         <div id="albumTypeButtons" class="album-type-grid"></div>
 
-        <div class="options-inline">
-          <label class="option-row"><input id="dryRun" type="checkbox" /> <span>Dry run (preview only — no playlist will be created)</span></label>
-          <label class="option-row"><input id="verbose" type="checkbox" /> <span>Verbose mode</span></label>
-        </div>
-
-        <br />
         <button id="createBtn">Create playlist</button>
         <div id="createLoading" class="loading hidden"><div class="spinner"></div><span>Creating your discography playlist…</span></div>
         <div id="createError" class="error"></div>
@@ -170,11 +169,15 @@
         <p><strong>Playlist:</strong> <span id="resPlaylist"></span></p>
         <p><strong>Albums included:</strong> <span id="resAlbums"></span></p>
         <p><strong>Tracks added:</strong> <span id="resTracks"></span></p>
-        <div id="playlistLinkWrap" class="hidden">
-          <a id="playlistLink" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open playlist on Spotify</a>
+        <div class="result-actions">
+          <div id="playlistLinkWrap" class="hidden">
+            <a id="playlistLink" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open playlist on Spotify</a>
+          </div>
+          <div id="playlistEmbedWrap" class="embed-wrap hidden">
+            <iframe id="playlistEmbed" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>
+          </div>
+          <button id="resetBtn">Start over</button>
         </div>
-        <p id="dryRunNote" class="muted hidden">Dry run enabled: no playlist was created.</p>
-        <button id="resetBtn">Start over</button>
       </section>
 
       <footer>
@@ -322,8 +325,8 @@
           artist_id: state.selectedArtist.id,
           artist_name: state.selectedArtist.name,
           album_type_selection: Number(state.selectedAlbumType),
-          dry_run: el('dryRun').checked,
-          verbose: el('verbose').checked
+          dry_run: false,
+          verbose: false
         };
 
         el('createLoading').classList.remove('hidden');
@@ -338,10 +341,16 @@
           if (result.playlist_url) {
             el('playlistLink').href = result.playlist_url;
             el('playlistLinkWrap').classList.remove('hidden');
+            if (result.playlist_id) {
+              el('playlistEmbed').src = `https://open.spotify.com/embed/playlist/${result.playlist_id}?utm_source=generator`;
+              el('playlistEmbedWrap').classList.remove('hidden');
+            } else {
+              el('playlistEmbedWrap').classList.add('hidden');
+            }
           } else {
             el('playlistLinkWrap').classList.add('hidden');
+            el('playlistEmbedWrap').classList.add('hidden');
           }
-          el('dryRunNote').classList.toggle('hidden', !result.dry_run);
           el('step3').classList.remove('hidden');
         } catch (e) {
           if (e.status === 401 && e.data?.auth_required) {
@@ -362,6 +371,9 @@
         el('artistsList').innerHTML = '';
         el('searchError').textContent = '';
         el('createError').textContent = '';
+        el('playlistLinkWrap').classList.add('hidden');
+        el('playlistEmbedWrap').classList.add('hidden');
+        el('playlistEmbed').src = '';
         el('step2').classList.add('hidden');
         el('step3').classList.add('hidden');
         renderAlbumTypeButtons();

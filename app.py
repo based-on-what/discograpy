@@ -132,7 +132,8 @@ def create_playlist():
     artist_id = (data.get("artist_id") or "").strip()
     artist_name = (data.get("artist_name") or "").strip()
     album_type_selection = data.get("album_type_selection", 0)
-    dry_run = bool(data.get("dry_run", False))
+    # Web flow always creates a playlist (dry-run disabled by product decision).
+    dry_run = False
     verbose = bool(data.get("verbose", False))
 
     if not artist_id or not artist_name:
