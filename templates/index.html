@@ -181,6 +181,7 @@
     <script>
       const state = { selectedArtist: null, selectedAlbumType: 0, albumTypes: [] };
       const el = (id) => document.getElementById(id);
+      let searchDebounceId = null;
 
       const albumTypeDescriptions = {
         0: { title: 'Everything', detail: 'Include absolutely everything available on Spotify: LPs, EPs, Singles, and Compilations.' },
@@ -225,6 +226,16 @@
           throw err;
         }
         return data;
+      }
+
+      function setSearchLoading(isLoading) {
+        el('searchLoading').classList.toggle('hidden', !isLoading);
+        el('searchBtn').disabled = isLoading;
+      }
+
+      function setCreateLoading(isLoading) {
+        el('createLoading').classList.toggle('hidden', !isLoading);
+        el('createBtn').disabled = isLoading;
       }
 
       function renderAlbumTypeButtons() {
@@ -274,21 +285,25 @@
 
       function showAuth(authUrl) {
         el('authBox').classList.remove('hidden');
-        el('authBox').innerHTML = `<p class="error">You must authenticate with Spotify first.</p><a class="btn" href="${authUrl}">Connect with Spotify</a>`;
+        el('authBox').innerHTML = `<p class="error">A Spotify creator account must be authenticated at least once.</p><a class="btn" href="${authUrl}">Connect creator account</a>`;
       }
 
-      async function onSearch() {
-        el('searchLoading').classList.add('hidden');
+      async function onSearch(silent = false) {
         el('searchError').textContent = '';
         el('authBox').classList.add('hidden');
         const artistName = el('artistInput').value.trim();
-        if (!artistName) {
-          el('searchError').textContent = 'Please enter an artist name.';
+        if (!artistName || artistName.length < 2) {
+          el('artistsList').innerHTML = '';
+          state.selectedArtist = null;
+          el('step2').classList.add('hidden');
+          setSearchLoading(false);
+          if (!silent && artistName.length > 0 && artistName.length < 2) {
+            el('searchError').textContent = 'Type at least 2 characters.';
+          }
           return;
         }
 
-        el('searchLoading').classList.remove('hidden');
-        el('searchBtn').disabled = true;
+        setSearchLoading(true);
         try {
           const artists = await request('/api/search', { artist_name: artistName });
           if (!artists.length) {
@@ -302,13 +317,12 @@
             el('searchError').textContent = e.message;
           }
         } finally {
-          el('searchLoading').classList.add('hidden');
-          el('searchBtn').disabled = false;
+          setSearchLoading(false);
         }
       }
 
       async function onCreate() {
-        el('createLoading').classList.add('hidden');
+        setCreateLoading(false);
         el('createError').textContent = '';
         if (!state.selectedArtist) {
           el('createError').textContent = 'Please select an artist first.';
@@ -323,8 +337,7 @@
           verbose: false
         };
 
-        el('createLoading').classList.remove('hidden');
-        el('createBtn').disabled = true;
+        setCreateLoading(true);
         try {
           const result = await request('/api/create', payload);
           el('resArtist').textContent = result.artist;
@@ -346,8 +359,7 @@
             el('createError').textContent = e.message;
           }
         } finally {
-          el('createLoading').classList.add('hidden');
-          el('createBtn').disabled = false;
+          setCreateLoading(false);
         }
       }
 
@@ -358,8 +370,8 @@
         el('artistsList').innerHTML = '';
         el('searchError').textContent = '';
         el('createError').textContent = '';
-        el('searchLoading').classList.add('hidden');
-        el('createLoading').classList.add('hidden');
+        setSearchLoading(false);
+        setCreateLoading(false);
         el('playlistEmbedWrap').classList.add('hidden');
         el('playlistEmbed').src = '';
         el('step2').classList.add('hidden');
@@ -367,11 +379,19 @@
         renderAlbumTypeButtons();
       }
 
+      function onArtistInput() {
+        clearTimeout(searchDebounceId);
+        searchDebounceId = setTimeout(() => onSearch(true), 350);
+      }
+
       initTheme();
       loadAlbumTypes();
       el('searchBtn').onclick = onSearch;
+      el('artistInput').addEventListener('input', onArtistInput);
       el('createBtn').onclick = onCreate;
       el('resetBtn').onclick = onReset;
+      setSearchLoading(false);
+      setCreateLoading(false);
     </script>
   </body>
 </html>

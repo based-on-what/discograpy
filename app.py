@@ -2,7 +2,7 @@ import os
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 from flask_cors import CORS
 from spotipy.exceptions import SpotifyException
 
@@ -39,7 +39,6 @@ def _ensure_spotify_token(creator: SpotifyDiscographyCreator) -> Optional[Dict[s
     token_info = auth_manager.get_cached_token()
     if token_info:
         return None
-    session["spotify_auth_requested"] = True
     return _build_auth_payload(creator)
 
 
@@ -69,7 +68,6 @@ def callback():
         creator = _creator()
         auth_manager = creator.sp.auth_manager
         auth_manager.get_access_token(code=code, check_cache=False)
-        session["spotify_auth_requested"] = False
         return redirect(url_for("index", oauth_success="1"))
     except Exception:
         app.logger.exception("OAuth callback failed")
