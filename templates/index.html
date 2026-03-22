@@ -110,7 +110,6 @@
         display: block;
       }
 
-      .hidden { display: none; }
       .muted { opacity: .8; font-size: .9rem; }
       .error { color: var(--error); margin-top: 8px; }
       .spinner {
@@ -123,6 +122,7 @@
         margin-right: 10px;
       }
       .loading { display: flex; align-items: center; margin-top: 10px; }
+      .hidden { display: none !important; }
       @keyframes spin { to { transform: rotate(360deg); } }
       footer { text-align: center; margin: 20px 0 5px; }
       footer a { color: var(--accent-2); }
