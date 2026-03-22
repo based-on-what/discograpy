@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DiscograPY</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --accent: #39ff14;
+        --accent-2: #00e676;
+        --bg: #0a0a0a;
+        --card: #111111;
+        --text: #e0e0e0;
+        --error: #ff4d4d;
+        --border: rgba(57, 255, 20, 0.35);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; font-family: "Space Mono", monospace; background: var(--bg); color: var(--text);
+      }
+      .container { max-width: 920px; margin: 24px auto; padding: 20px; }
+      .card {
+        background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 18px;
+        box-shadow: 0 0 10px rgba(57, 255, 20, 0.15);
+      }
+      .header { position: relative; }
+      h1 { margin: 0 0 8px; color: var(--accent); text-shadow: 0 0 12px rgba(57, 255, 20, 0.8); }
+      .subtitle { margin: 0 0 16px; opacity: .85; }
+      .top-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      .theme-toggle { position: absolute; top: 0; right: 0; }
+      button, .btn {
+        border: 1px solid var(--accent); background: transparent; color: var(--accent); padding: 10px 14px;
+        border-radius: 8px; cursor: pointer; font-family: inherit; text-decoration: none;
+        box-shadow: 0 0 10px rgba(57, 255, 20, 0.45);
+      }
+      button:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
+      input, select {
+        width: 100%; margin-top: 8px; margin-bottom: 12px; border-radius: 8px; border: 1px solid var(--border);
+        padding: 10px; background: transparent; color: var(--text); font-family: inherit;
+      }
+      .artists-list { max-height: 250px; overflow-y: auto; display: grid; gap: 10px; margin-top: 12px; }
+      .artist-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; }
+      .artist-item.selected { border-color: var(--accent); box-shadow: 0 0 12px rgba(57, 255, 20, 0.5); }
+      .hidden { display: none; }
+      .muted { opacity: .8; font-size: .9rem; }
+      .error { color: var(--error); margin-top: 8px; }
+      .spinner {
+        width: 28px; height: 28px; border: 3px solid rgba(57, 255, 20, 0.2); border-top-color: var(--accent);
+        border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 10px;
+      }
+      .loading { display: flex; align-items: center; margin-top: 10px; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      footer { text-align: center; margin: 20px 0 5px; }
+      footer a { color: var(--accent-2); }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <section class="card header">
+        <button id="themeToggle" class="theme-toggle">☾/☀</button>
+        <h1>DiscograPY</h1>
+        <p class="subtitle">Spotify Discography Playlist Creator</p>
+        <div class="top-actions">
+          <a class="btn" href="https://github.com/based-on-what/discograpy" target="_blank" rel="noopener noreferrer">⌁ Ver en GitHub</a>
+        </div>
+      </section>
+
+      <section class="card" id="step1">
+        <h2>Paso 1 — Buscar artista</h2>
+        <label for="artistInput">Nombre del artista</label>
+        <input id="artistInput" type="text" placeholder="Ej: Daft Punk" />
+        <button id="searchBtn">Buscar</button>
+        <div id="searchLoading" class="loading hidden"><div class="spinner"></div><span>Buscando artistas…</span></div>
+        <div id="searchError" class="error"></div>
+        <div id="authBox" class="hidden"></div>
+        <div id="artistsList" class="artists-list"></div>
+      </section>
+
+      <section class="card hidden" id="step2">
+        <h2>Paso 2 — Configurar playlist</h2>
+        <p>Artista seleccionado: <strong id="selectedArtist"></strong></p>
+        <label for="albumTypeSelect">Tipo de álbum</label>
+        <select id="albumTypeSelect"></select>
+        <label><input id="dryRun" type="checkbox" /> Dry run (solo vista previa — no se creará ninguna playlist)</label><br />
+        <label><input id="verbose" type="checkbox" /> Modo verbose</label><br /><br />
+        <button id="createBtn">Crear playlist</button>
+        <div id="createLoading" class="loading hidden"><div class="spinner"></div><span>Creando tu playlist de discografía…</span></div>
+        <div id="createError" class="error"></div>
+      </section>
+
+      <section class="card hidden" id="step3">
+        <h2>Paso 3 — Resultado</h2>
+        <p><strong>Artista:</strong> <span id="resArtist"></span></p>
+        <p><strong>Playlist:</strong> <span id="resPlaylist"></span></p>
+        <p><strong>Álbumes incluidos:</strong> <span id="resAlbums"></span></p>
+        <p><strong>Canciones añadidas:</strong> <span id="resTracks"></span></p>
+        <div id="playlistLinkWrap" class="hidden">
+          <a id="playlistLink" class="btn" href="#" target="_blank" rel="noopener noreferrer">Abrir playlist en Spotify</a>
+        </div>
+        <p id="dryRunNote" class="muted hidden">Dry run activo: no se creó ninguna playlist.</p>
+        <button id="resetBtn">Empezar de nuevo</button>
+      </section>
+
+      <footer>
+        Hecho con DiscograPY — código abierto ·
+        <a href="https://github.com/based-on-what/discograpy" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </footer>
+    </div>
+
+    <script>
+      const state = { selectedArtist: null, albumTypes: [] };
+      const el = (id) => document.getElementById(id);
+
+      function applyTheme(mode) {
+        const dark = mode !== 'light';
+        const vars = dark
+          ? { '--bg': '#0a0a0a', '--card': '#111111', '--text': '#e0e0e0' }
+          : { '--bg': '#f0f0f0', '--card': '#ffffff', '--text': '#1a1a1a' };
+        Object.entries(vars).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
+      }
+
+      function initTheme() {
+        const stored = localStorage.getItem('discograpy-theme') || 'dark';
+        applyTheme(stored);
+        el('themeToggle').onclick = () => {
+          const current = localStorage.getItem('discograpy-theme') || 'dark';
+          const next = current === 'dark' ? 'light' : 'dark';
+          localStorage.setItem('discograpy-theme', next);
+          applyTheme(next);
+        };
+      }
+
+      async function request(path, payload) {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const err = new Error(data.error || 'Error inesperado');
+          err.data = data;
+          err.status = res.status;
+          throw err;
+        }
+        return data;
+      }
+
+      async function loadAlbumTypes() {
+        const res = await fetch('/api/album-types');
+        const data = await res.json();
+        state.albumTypes = data;
+        const select = el('albumTypeSelect');
+        select.innerHTML = '';
+        data.forEach((item) => {
+          const option = document.createElement('option');
+          option.value = item.index;
+          option.textContent = `${item.index} — ${item.label} (${item.description})`;
+          select.appendChild(option);
+        });
+      }
+
+      function renderArtists(artists) {
+        const list = el('artistsList');
+        list.innerHTML = '';
+        artists.forEach((artist) => {
+          const item = document.createElement('div');
+          item.className = 'artist-item';
+          item.innerHTML = `<strong>${artist.name}</strong><br><span class="muted">Seguidores: ${artist.followers.toLocaleString()} · Géneros: ${(artist.genres || []).join(', ') || 'n/a'}</span>`;
+          item.onclick = () => {
+            Array.from(document.querySelectorAll('.artist-item')).forEach((n) => n.classList.remove('selected'));
+            item.classList.add('selected');
+            state.selectedArtist = artist;
+            el('selectedArtist').textContent = artist.name;
+            el('step2').classList.remove('hidden');
+            el('createError').textContent = '';
+          };
+          list.appendChild(item);
+        });
+      }
+
+      function showAuth(authUrl) {
+        el('authBox').classList.remove('hidden');
+        el('authBox').innerHTML = `<p class="error">Debes autenticarte con Spotify primero.</p><a class="btn" href="${authUrl}">Conectar con Spotify</a>`;
+      }
+
+      async function onSearch() {
+        el('searchError').textContent = '';
+        el('authBox').classList.add('hidden');
+        const artistName = el('artistInput').value.trim();
+        if (!artistName) {
+          el('searchError').textContent = 'Ingresa un nombre de artista.';
+          return;
+        }
+
+        el('searchLoading').classList.remove('hidden');
+        el('searchBtn').disabled = true;
+        try {
+          const artists = await request('/api/search', { artist_name: artistName });
+          if (!artists.length) {
+            el('searchError').textContent = 'No se encontraron artistas.';
+          }
+          renderArtists(artists);
+        } catch (e) {
+          if (e.status === 401 && e.data?.auth_required) {
+            showAuth(e.data.auth_url);
+          } else {
+            el('searchError').textContent = e.message;
+          }
+        } finally {
+          el('searchLoading').classList.add('hidden');
+          el('searchBtn').disabled = false;
+        }
+      }
+
+      async function onCreate() {
+        el('createError').textContent = '';
+        if (!state.selectedArtist) {
+          el('createError').textContent = 'Selecciona un artista primero.';
+          return;
+        }
+
+        const payload = {
+          artist_id: state.selectedArtist.id,
+          artist_name: state.selectedArtist.name,
+          album_type_selection: Number(el('albumTypeSelect').value),
+          dry_run: el('dryRun').checked,
+          verbose: el('verbose').checked
+        };
+
+        el('createLoading').classList.remove('hidden');
+        el('createBtn').disabled = true;
+        try {
+          const result = await request('/api/create', payload);
+          el('resArtist').textContent = result.artist;
+          el('resPlaylist').textContent = result.playlist_name;
+          el('resAlbums').textContent = result.albums_included;
+          el('resTracks').textContent = result.tracks_added;
+
+          if (result.playlist_url) {
+            el('playlistLink').href = result.playlist_url;
+            el('playlistLinkWrap').classList.remove('hidden');
+          } else {
+            el('playlistLinkWrap').classList.add('hidden');
+          }
+          el('dryRunNote').classList.toggle('hidden', !result.dry_run);
+          el('step3').classList.remove('hidden');
+        } catch (e) {
+          if (e.status === 401 && e.data?.auth_required) {
+            showAuth(e.data.auth_url);
+          } else {
+            el('createError').textContent = e.message;
+          }
+        } finally {
+          el('createLoading').classList.add('hidden');
+          el('createBtn').disabled = false;
+        }
+      }
+
+      function onReset() {
+        state.selectedArtist = null;
+        el('artistInput').value = '';
+        el('artistsList').innerHTML = '';
+        el('searchError').textContent = '';
+        el('createError').textContent = '';
+        el('step2').classList.add('hidden');
+        el('step3').classList.add('hidden');
+      }
+
+      initTheme();
+      loadAlbumTypes();
+      el('searchBtn').onclick = onSearch;
+      el('createBtn').onclick = onCreate;
+      el('resetBtn').onclick = onReset;
+    </script>
+  </body>
+</html>
