@@ -119,7 +119,10 @@ Create a `.env` file in the project root directory:
 SPOTIPY_CLIENT_ID=your_client_id_here
 SPOTIPY_CLIENT_SECRET=your_client_secret_here
 SPOTIPY_REDIRECT_URI=http://127.0.0.1:5000/callback
+SPOTIPY_REFRESH_TOKEN=your_creator_account_refresh_token_here
 ```
+
+> `SPOTIPY_REFRESH_TOKEN` is recommended for production if you want server-side playlist creation without forcing end users to authenticate.
 
 ⚠️ **Important:** Never commit your `.env` file to version control. It's already included in `.gitignore`.
 

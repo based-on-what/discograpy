@@ -140,7 +140,6 @@
         <h2>Step 1 — Search artist</h2>
         <label for="artistInput">Artist name</label>
         <input id="artistInput" type="text" placeholder="Example: Daft Punk" />
-        <button id="searchBtn">Search</button>
         <div id="searchLoading" class="loading hidden"><div class="spinner"></div><span>Searching artists…</span></div>
         <div id="searchError" class="error"></div>
         <div id="authBox" class="hidden"></div>
@@ -230,7 +229,6 @@
 
       function setSearchLoading(isLoading) {
         el('searchLoading').classList.toggle('hidden', !isLoading);
-        el('searchBtn').disabled = isLoading;
       }
 
       function setCreateLoading(isLoading) {
@@ -283,9 +281,9 @@
         });
       }
 
-      function showAuth(authUrl) {
+      function showAuth() {
         el('authBox').classList.remove('hidden');
-        el('authBox').innerHTML = `<p class="error">A Spotify creator account must be authenticated at least once.</p><a class="btn" href="${authUrl}">Connect creator account</a>`;
+        el('authBox').innerHTML = `<p class="error">Server Spotify account is not authenticated. Configure SPOTIPY_REFRESH_TOKEN in Railway to enable playlist creation without user login.</p>`;
       }
 
       async function onSearch(silent = false) {
@@ -312,7 +310,7 @@
           renderArtists(artists);
         } catch (e) {
           if (e.status === 401 && e.data?.auth_required) {
-            showAuth(e.data.auth_url);
+            showAuth();
           } else {
             el('searchError').textContent = e.message;
           }
@@ -354,7 +352,7 @@
           el('step3').classList.remove('hidden');
         } catch (e) {
           if (e.status === 401 && e.data?.auth_required) {
-            showAuth(e.data.auth_url);
+            showAuth();
           } else {
             el('createError').textContent = e.message;
           }
@@ -386,7 +384,6 @@
 
       initTheme();
       loadAlbumTypes();
-      el('searchBtn').onclick = onSearch;
       el('artistInput').addEventListener('input', onArtistInput);
       el('createBtn').onclick = onCreate;
       el('resetBtn').onclick = onReset;

@@ -25,12 +25,12 @@ def _creator(dry_run: bool = False, verbose: bool = False) -> SpotifyDiscography
 
 
 def _build_auth_payload(creator: SpotifyDiscographyCreator) -> Dict[str, Any]:
-    auth_manager = creator.sp.auth_manager
-    auth_url = auth_manager.get_authorize_url()
     return {
-        "error": "Spotify authentication required.",
+        "error": (
+            "Spotify creator account is not authenticated on the server. "
+            "Set SPOTIPY_REFRESH_TOKEN (recommended) or authenticate the server account once."
+        ),
         "auth_required": True,
-        "auth_url": auth_url,
     }
 
 
@@ -39,6 +39,13 @@ def _ensure_spotify_token(creator: SpotifyDiscographyCreator) -> Optional[Dict[s
     token_info = auth_manager.get_cached_token()
     if token_info:
         return None
+
+    refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
+    if refresh_token:
+        token_info = auth_manager.refresh_access_token(refresh_token)
+        if token_info:
+            return None
+
     return _build_auth_payload(creator)
 
 
