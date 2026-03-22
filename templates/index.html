@@ -36,7 +36,6 @@
       .header { position: relative; }
       h1 { margin: 0 0 8px; color: var(--accent); text-shadow: 0 0 12px rgba(57, 255, 20, 0.8); }
       .subtitle { margin: 0 0 16px; opacity: .85; }
-      .top-actions { display: flex; gap: 10px; flex-wrap: wrap; }
       .theme-toggle { position: absolute; top: 0; right: 0; }
 
       button, .btn {
@@ -135,9 +134,6 @@
         <button id="themeToggle" class="theme-toggle">☾/☀</button>
         <h1>DiscograPY</h1>
         <p class="subtitle">Spotify Discography Playlist Creator</p>
-        <div class="top-actions">
-          <a class="btn" href="https://github.com/based-on-what/discograpy" target="_blank" rel="noopener noreferrer">⌁ View on GitHub</a>
-        </div>
       </section>
 
       <section class="card" id="step1">
@@ -170,9 +166,6 @@
         <p><strong>Albums included:</strong> <span id="resAlbums"></span></p>
         <p><strong>Tracks added:</strong> <span id="resTracks"></span></p>
         <div class="result-actions">
-          <div id="playlistLinkWrap" class="hidden">
-            <a id="playlistLink" class="btn" href="#" target="_blank" rel="noopener noreferrer">Open playlist on Spotify</a>
-          </div>
           <div id="playlistEmbedWrap" class="embed-wrap hidden">
             <iframe id="playlistEmbed" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>
           </div>
@@ -181,8 +174,7 @@
       </section>
 
       <footer>
-        Made with DiscograPY — open source ·
-        <a href="https://github.com/based-on-what/discograpy" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/based-on-what/discograpy" target="_blank" rel="noopener noreferrer">DiscograPY - Coded with ❤️ by @based-on-what</a>
       </footer>
     </div>
 
@@ -286,6 +278,7 @@
       }
 
       async function onSearch() {
+        el('searchLoading').classList.add('hidden');
         el('searchError').textContent = '';
         el('authBox').classList.add('hidden');
         const artistName = el('artistInput').value.trim();
@@ -315,6 +308,7 @@
       }
 
       async function onCreate() {
+        el('createLoading').classList.add('hidden');
         el('createError').textContent = '';
         if (!state.selectedArtist) {
           el('createError').textContent = 'Please select an artist first.';
@@ -338,17 +332,10 @@
           el('resAlbums').textContent = result.albums_included;
           el('resTracks').textContent = result.tracks_added;
 
-          if (result.playlist_url) {
-            el('playlistLink').href = result.playlist_url;
-            el('playlistLinkWrap').classList.remove('hidden');
-            if (result.playlist_id) {
-              el('playlistEmbed').src = `https://open.spotify.com/embed/playlist/${result.playlist_id}?utm_source=generator`;
-              el('playlistEmbedWrap').classList.remove('hidden');
-            } else {
-              el('playlistEmbedWrap').classList.add('hidden');
-            }
+          if (result.playlist_id) {
+            el('playlistEmbed').src = `https://open.spotify.com/embed/playlist/${result.playlist_id}?utm_source=generator`;
+            el('playlistEmbedWrap').classList.remove('hidden');
           } else {
-            el('playlistLinkWrap').classList.add('hidden');
             el('playlistEmbedWrap').classList.add('hidden');
           }
           el('step3').classList.remove('hidden');
@@ -371,7 +358,8 @@
         el('artistsList').innerHTML = '';
         el('searchError').textContent = '';
         el('createError').textContent = '';
-        el('playlistLinkWrap').classList.add('hidden');
+        el('searchLoading').classList.add('hidden');
+        el('createLoading').classList.add('hidden');
         el('playlistEmbedWrap').classList.add('hidden');
         el('playlistEmbed').src = '';
         el('step2').classList.add('hidden');
