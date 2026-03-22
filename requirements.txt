@@ -1,2 +1,5 @@
-spotipy>=2.23.0
-python-dotenv>=1.0.0
+flask
+gunicorn
+spotipy
+python-dotenv
+flask-cors
