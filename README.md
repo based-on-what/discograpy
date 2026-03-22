@@ -1,37 +1,39 @@
-# 🎵 Spotify Discography Playlist Creator
+# 🎵 DiscograPY — Spotify Discography Playlist Creator
 
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This Python script uses the **Spotify Web API** (via [Spotipy](https://spotipy.readthedocs.io/)) to **automatically generate a playlist containing all the albums of a given artist in release order**.
+DiscograPY includes:
 
-The script has been **optimized for performance, scalability, error handling, and logging**, making it suitable for handling artists with large discographies while minimizing API rate-limit issues.
+- A **web app** (Flask + HTML/CSS/JS vanilla) to search artists and create discography playlists.
+- A **CLI script** (`playlists.py`) with the same Spotify discography logic.
+- Deployment config for **Railway**.
+
+The project uses the **Spotify Web API** through [Spotipy](https://spotipy.readthedocs.io/) and is optimized for performance, pagination, retries, and logging.
+
+## 🌐 Production
+
+Live app: **https://discograpy-production.up.railway.app/**
 
 ## 📋 Table of Contents
 
+- [Production](#-production)
 - [Features](#-features)
 - [Requirements](#️-requirements)
 - [Installation](#-installation)
 - [Setup](#-setup)
-- [Usage](#-usage)
-- [First Run](#-first-run)
+- [Usage (Web)](#-usage-web)
+- [Usage (CLI)](#-usage-cli)
 - [Project Structure](#-project-structure)
 - [Logging](#-logging)
-- [Technical Improvements](#-technical-improvements)
-- [Performance Optimization](#-performance-optimization)
-- [Permissions Required](#-permissions-required)
-- [Example Output](#-example-output)
-- [Notes & Limitations](#️-notes--limitations)
-- [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Author](#-author)
 
 ---
 
 ## ✨ Features
 
 - Search for any artist on Spotify and select from all matching results.  
+- Web interface with 3-step flow (Search → Configure → Result).
+- Spotify embedded playlist preview after creation.
 - **Choose album types:** Everything, Albums only, EPs only, Singles only, Compilations only, or combinations (EPs + Singles, Albums + EPs + Singles).
 - Retrieve **all albums** (with pagination support).  
 - **Smart filtering:** Distinguishes between albums, EPs (4-7 tracks), and singles (1-3 tracks).
@@ -50,8 +52,11 @@ The script has been **optimized for performance, scalability, error handling, an
 - **Python 3.8+**  
 - **Spotify Developer Account** with API credentials  
 - Required Python packages:
+  - `flask` (web server)
+  - `gunicorn` (production WSGI server)
   - `spotipy` (Spotify Web API wrapper)
   - `python-dotenv` (Environment variable management)
+  - `flask-cors` (CORS support for API)
 
 ---
 
@@ -66,7 +71,7 @@ pip install -r requirements.txt
 ### Option 2: Manual installation
 
 ```bash
-pip install spotipy python-dotenv
+pip install flask gunicorn spotipy python-dotenv flask-cors
 ```
 
 ---
@@ -92,8 +97,16 @@ After creating your app, you'll see:
 1. In your app settings, click **"Edit Settings"**
 2. Add the following to **Redirect URIs**:
 
+For local web development:
+
 ```
-http://localhost:8888/callback/
+http://127.0.0.1:5000/callback
+```
+
+For production (Railway):
+
+```
+https://discograpy-production.up.railway.app/callback
 ```
 
 3. Click **"Add"** and then **"Save"**
@@ -105,14 +118,34 @@ Create a `.env` file in the project root directory:
 ```env
 SPOTIPY_CLIENT_ID=your_client_id_here
 SPOTIPY_CLIENT_SECRET=your_client_secret_here
-SPOTIPY_REDIRECT_URI=http://localhost:8888/callback/
+SPOTIPY_REDIRECT_URI=http://127.0.0.1:5000/callback
 ```
 
 ⚠️ **Important:** Never commit your `.env` file to version control. It's already included in `.gitignore`.
 
 ---
 
-## 🚀 Usage
+## 🚀 Usage (Web)
+
+Run the Flask app locally:
+
+```bash
+python app.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:5000
+```
+
+For production-like local run:
+
+```bash
+gunicorn app:app --bind 0.0.0.0:5000
+```
+
+## 🚀 Usage (CLI)
 
 Run the script:
 
@@ -148,33 +181,19 @@ python playlists.py
 
 ---
 
-## 🔐 First Run
-
-On your first run, you'll need to authenticate with Spotify:
-
-1. The script will open a browser window automatically
-2. Log in to Spotify (if not already logged in)
-3. Click **"Agree"** to grant permissions
-4. You'll be redirected to `http://localhost:8888/callback/...`
-5. **Copy the entire URL** from your browser
-6. **Paste it back** into the terminal when prompted
-7. Press Enter
-
-The script will save your authentication token in a `.cache` file. Future runs won't require this step unless the token expires or is deleted.
-
----
-
 ## 📁 Project Structure
 
 ```
-discography/
-├── playlists.py           # Main script
+discograpy/
+├── app.py                 # Flask backend + API + routes
+├── playlists.py           # Existing Spotify discography logic (CLI + core methods)
+├── templates/
+│   └── index.html         # Single-page frontend
 ├── requirements.txt       # Python dependencies
-├── .env                   # Your API credentials (create this)
-├── .gitignore            # Git ignore rules
-├── README.md             # This file
-├── .cache                # Spotify auth token (auto-generated)
-└── spotify_discography.log  # Log file (auto-generated)
+├── Procfile               # Railway/Heroku process type
+├── railway.toml           # Railway deployment config
+├── README.md              # Documentation
+└── spotify_discography.log  # Runtime log file (generated)
 ```
 
 ---
@@ -573,7 +592,9 @@ Before running the script, ensure you have:
 - [x] Dependencies installed (`pip install -r requirements.txt`)
 - [x] Spotify Developer app created at [developer.spotify.com](https://developer.spotify.com/dashboard)
 - [x] `.env` file configured with `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_SECRET`, and `SPOTIPY_REDIRECT_URI`
-- [x] Redirect URI set to `http://localhost:8888/callback/` in Spotify app settings
+- [x] Redirect URI set for your environment:
+  - Local: `http://127.0.0.1:5000/callback`
+  - Production: `https://discograpy-production.up.railway.app/callback`
 - [x] Ready for first-time authentication flow
 
 ---
