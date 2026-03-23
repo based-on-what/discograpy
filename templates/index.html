@@ -16,8 +16,12 @@
         --text: #e0e0e0;
         --error: #ff4d4d;
         --border: rgba(57, 255, 20, 0.35);
+        --accent-rgb: 57, 255, 20;
+        --selected-bg: rgba(57, 255, 20, 0.14);
       }
       * { box-sizing: border-box; }
+      html { color-scheme: dark; }
+      html[data-theme='light'] { color-scheme: light; }
       body {
         margin: 0;
         font-family: "Space Mono", monospace;
@@ -31,10 +35,10 @@
         border-radius: 12px;
         padding: 20px;
         margin-bottom: 18px;
-        box-shadow: 0 0 10px rgba(57, 255, 20, 0.15);
+        box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.15);
       }
       .header { position: relative; }
-      h1 { margin: 0 0 8px; color: var(--accent); text-shadow: 0 0 12px rgba(57, 255, 20, 0.8); }
+      h1 { margin: 0 0 8px; color: var(--accent); text-shadow: 0 0 12px rgba(var(--accent-rgb), 0.8); }
       .subtitle { margin: 0 0 16px; opacity: .85; }
       .theme-toggle { position: absolute; top: 0; right: 0; }
 
@@ -47,7 +51,7 @@
         cursor: pointer;
         font-family: inherit;
         text-decoration: none;
-        box-shadow: 0 0 10px rgba(57, 255, 20, 0.45);
+        box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.45);
       }
       button:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
 
@@ -63,9 +67,38 @@
         font-family: inherit;
       }
 
-      .artists-list { max-height: 250px; overflow-y: auto; display: grid; gap: 10px; margin-top: 12px; }
-      .artist-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; }
-      .artist-item.selected { border-color: var(--accent); box-shadow: 0 0 12px rgba(57, 255, 20, 0.5); }
+      .artists-list { max-height: 320px; overflow-y: auto; display: grid; gap: 10px; margin-top: 12px; }
+      .artist-item {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: 56px 1fr;
+        gap: 12px;
+        align-items: center;
+      }
+      .artist-item.selected {
+        border-color: var(--accent);
+        box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.5);
+        background: var(--selected-bg);
+      }
+      .artist-photo {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 1px solid var(--border);
+      }
+      .artist-photo-placeholder {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--border);
+        opacity: 0.8;
+      }
 
       .album-type-grid {
         display: grid;
@@ -83,10 +116,11 @@
       }
       .album-type-btn small { color: var(--text); opacity: 0.78; }
       .album-type-btn.selected {
-        background: rgba(57, 255, 20, 0.1);
+        background: var(--selected-bg);
         border-color: var(--accent);
-        box-shadow: 0 0 14px rgba(57, 255, 20, 0.65);
+        box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.65);
       }
+      #createBtn { margin-top: 18px; }
 
       .result-actions {
         display: flex;
@@ -101,7 +135,7 @@
         border: 1px solid var(--border);
         border-radius: 12px;
         overflow: hidden;
-        box-shadow: 0 0 10px rgba(57, 255, 20, 0.18);
+        box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.18);
       }
       .embed-wrap iframe {
         width: 100%;
@@ -115,7 +149,7 @@
       .spinner {
         width: 28px;
         height: 28px;
-        border: 3px solid rgba(57, 255, 20, 0.2);
+        border: 3px solid rgba(var(--accent-rgb), 0.2);
         border-top-color: var(--accent);
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
@@ -195,9 +229,28 @@
       function applyTheme(mode) {
         const dark = mode !== 'light';
         const vars = dark
-          ? { '--bg': '#0a0a0a', '--card': '#111111', '--text': '#e0e0e0' }
-          : { '--bg': '#f0f0f0', '--card': '#ffffff', '--text': '#1a1a1a' };
+          ? {
+              '--bg': '#0a0a0a',
+              '--card': '#111111',
+              '--text': '#e0e0e0',
+              '--accent': '#39ff14',
+              '--accent-2': '#00e676',
+              '--border': 'rgba(57, 255, 20, 0.35)',
+              '--accent-rgb': '57, 255, 20',
+              '--selected-bg': 'rgba(112, 255, 84, 0.34)'
+            }
+          : {
+              '--bg': '#f3f3f3',
+              '--card': '#ffffff',
+              '--text': '#ff073a',
+              '--accent': '#ff073a',
+              '--accent-2': '#ff4f72',
+              '--border': 'rgba(255, 7, 58, 0.45)',
+              '--accent-rgb': '255, 7, 58',
+              '--selected-bg': 'rgba(255, 7, 58, 0.2)'
+            };
         Object.entries(vars).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
       }
 
       function initTheme() {
@@ -217,7 +270,13 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
+        const raw = await res.text();
+        let data = {};
+        try {
+          data = raw ? JSON.parse(raw) : {};
+        } catch (_e) {
+          data = { error: `Server returned a non-JSON response (${res.status}).` };
+        }
         if (!res.ok) {
           const err = new Error(data.error || 'Unexpected error');
           err.data = data;
@@ -268,7 +327,16 @@
         artists.forEach((artist) => {
           const item = document.createElement('div');
           item.className = 'artist-item';
-          item.innerHTML = `<strong>${artist.name}</strong><br><span class="muted">Followers: ${artist.followers.toLocaleString()} · Genres: ${(artist.genres || []).join(', ') || 'n/a'}</span>`;
+          const photo = artist.image_url
+            ? `<img class="artist-photo" src="${artist.image_url}" alt="Photo of ${artist.name}" loading="lazy" />`
+            : `<div class="artist-photo-placeholder">🎵</div>`;
+          item.innerHTML = `
+            ${photo}
+            <div>
+              <strong>${artist.name}</strong><br>
+              <span class="muted">Followers: ${artist.followers.toLocaleString()} · Genres: ${(artist.genres || []).join(', ') || 'not available'} · Country: ${artist.country || 'Unknown'}</span>
+            </div>
+          `;
           item.onclick = () => {
             Array.from(document.querySelectorAll('.artist-item')).forEach((n) => n.classList.remove('selected'));
             item.classList.add('selected');

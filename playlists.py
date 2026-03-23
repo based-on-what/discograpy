@@ -336,8 +336,8 @@ class SpotifyDiscographyCreator:
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         if not artist_name.strip():
             raise ValueError("Artist name cannot be empty")
-        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=50)
-        return self._paginate_spotify_results(results, "items")
+        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=12)
+        return results.get("artists", {}).get("items", [])
 
     def display_artists(self, artists: List[Dict[str, Any]]) -> None:
         print(f"\nFound {len(artists)} artists:")

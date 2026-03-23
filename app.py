@@ -111,16 +111,24 @@ def search_artist():
             return jsonify(auth_response), 401
 
         artists = creator.search_artists(artist_name)
-        serialized = [
-            {
-                "id": artist.get("id"),
-                "name": artist.get("name"),
-                "followers": artist.get("followers", {}).get("total", 0),
-                "genres": artist.get("genres", [])[:3],
-            }
-            for artist in artists
-            if artist.get("id")
-        ]
+        serialized = []
+        for artist in artists:
+            if not artist.get("id"):
+                continue
+
+            genres = [genre for genre in (artist.get("genres") or []) if genre][:3]
+
+            serialized.append(
+                {
+                    "id": artist.get("id"),
+                    "name": artist.get("name"),
+                    "followers": artist.get("followers", {}).get("total", 0),
+                    "genres": genres,
+                    "image_url": (artist.get("images") or [{}])[0].get("url"),
+                    # Spotify's artist object does not expose artist country of origin.
+                    "country": "Unknown",
+                }
+            )
         return jsonify(serialized)
     except ValueError as exc:
         return _json_error(str(exc), 400)
