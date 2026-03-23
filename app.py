@@ -111,16 +111,26 @@ def search_artist():
             return jsonify(auth_response), 401
 
         artists = creator.search_artists(artist_name)
-        serialized = [
-            {
-                "id": artist.get("id"),
-                "name": artist.get("name"),
-                "followers": artist.get("followers", {}).get("total", 0),
-                "genres": artist.get("genres", [])[:3],
-            }
-            for artist in artists
-            if artist.get("id")
-        ]
+        serialized = []
+        for artist in artists:
+            if not artist.get("id"):
+                continue
+
+            mb_data = creator._lookup_artist_metadata(artist.get("name", ""))
+            mb_genres = [genre for genre in (mb_data.get("genres") or []) if genre][:3]
+            spotify_genres = [genre for genre in (artist.get("genres") or []) if genre][:3]
+            genres = mb_genres or spotify_genres
+
+            serialized.append(
+                {
+                    "id": artist.get("id"),
+                    "name": artist.get("name"),
+                    "followers": artist.get("followers", {}).get("total", 0),
+                    "genres": genres,
+                    "image_url": (artist.get("images") or [{}])[0].get("url"),
+                    "country": mb_data.get("country") or "Unknown",
+                }
+            )
         return jsonify(serialized)
     except ValueError as exc:
         return _json_error(str(exc), 400)

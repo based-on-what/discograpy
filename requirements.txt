@@ -3,3 +3,5 @@ gunicorn
 spotipy
 python-dotenv
 flask-cors
+requests
+pycountry
