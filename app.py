@@ -112,23 +112,21 @@ def search_artist():
 
         artists = creator.search_artists(artist_name)
         serialized = []
-        for idx, artist in enumerate(artists):
+        for artist in artists:
             if not artist.get("id"):
                 continue
+
+            genres = [genre for genre in (artist.get("genres") or []) if genre][:3]
 
             serialized.append(
                 {
                     "id": artist.get("id"),
                     "name": artist.get("name"),
                     "followers": artist.get("followers", {}).get("total", 0),
-                    "genres": creator._infer_genres(artist, use_related=idx < 5),
+                    "genres": genres,
                     "image_url": (artist.get("images") or [{}])[0].get("url"),
-                    "country": (
-                        creator._lookup_artist_country(artist.get("name", ""))
-                        if idx < 5
-                        else "Unknown"
-                    )
-                    or "Unknown",
+                    # Spotify's artist object does not expose artist country of origin.
+                    "country": "Unknown",
                 }
             )
         return jsonify(serialized)
