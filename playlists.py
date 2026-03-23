@@ -8,9 +8,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from functools import wraps
+from functools import lru_cache, wraps
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import requests
 import spotipy
 from dotenv import load_dotenv
 from spotipy.exceptions import SpotifyException
