@@ -8,9 +8,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from functools import wraps
+from functools import lru_cache, wraps
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import requests
 import spotipy
 from dotenv import load_dotenv
 from spotipy.exceptions import SpotifyException
@@ -336,8 +337,85 @@ class SpotifyDiscographyCreator:
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         if not artist_name.strip():
             raise ValueError("Artist name cannot be empty")
-        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=50)
-        return self._paginate_spotify_results(results, "items")
+        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=12)
+        return results.get("artists", {}).get("items", [])
+
+    @retry_on_failure(max_retries=3)
+    def _get_related_artists(self, artist_id: str) -> List[Dict[str, Any]]:
+        data = self.sp.artist_related_artists(artist_id)
+        return data.get("artists", []) if data else []
+
+    def _infer_genres(self, artist: Dict[str, Any], use_related: bool = True) -> List[str]:
+        artist_genres = [genre for genre in artist.get("genres", []) if genre]
+        if artist_genres:
+            return artist_genres[:3]
+
+        if not use_related:
+            return []
+
+        artist_id = artist.get("id")
+        if not artist_id:
+            return []
+
+        try:
+            related = self._get_related_artists(artist_id)
+        except SpotifyException:
+            return []
+
+        ranked: Dict[str, int] = {}
+        for related_artist in related:
+            for genre in related_artist.get("genres", []):
+                ranked[genre] = ranked.get(genre, 0) + 1
+
+        return [genre for genre, _ in sorted(ranked.items(), key=lambda item: item[1], reverse=True)[:3]]
+
+    @staticmethod
+    @lru_cache(maxsize=2048)
+    def _lookup_artist_country_cached(artist_name: str) -> Optional[str]:
+        if not artist_name:
+            return None
+
+        endpoint = "https://musicbrainz.org/ws/2/artist/"
+        params = {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5}
+        headers = {"User-Agent": "DiscograPY/1.0 (https://github.com/based-on-what/discograpy)"}
+
+        try:
+            response = requests.get(endpoint, params=params, headers=headers, timeout=1.2)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException:
+            return None
+        except ValueError:
+            return None
+
+        candidates = payload.get("artists", []) if isinstance(payload, dict) else []
+        if not candidates:
+            return None
+
+        normalized_name = artist_name.strip().casefold()
+        exact_match = next(
+            (
+                artist
+                for artist in candidates
+                if str(artist.get("name", "")).strip().casefold() == normalized_name
+            ),
+            None,
+        )
+        chosen = exact_match or max(candidates, key=lambda item: int(item.get("score", 0)))
+
+        country = chosen.get("country")
+        if country:
+            return country
+
+        area = chosen.get("area")
+        if isinstance(area, dict):
+            area_name = area.get("name")
+            if area_name:
+                return str(area_name)
+        return None
+
+    def _lookup_artist_country(self, artist_name: str) -> Optional[str]:
+        return self._lookup_artist_country_cached((artist_name or "").strip())
 
     def display_artists(self, artists: List[Dict[str, Any]]) -> None:
         print(f"\nFound {len(artists)} artists:")

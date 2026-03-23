@@ -111,16 +111,26 @@ def search_artist():
             return jsonify(auth_response), 401
 
         artists = creator.search_artists(artist_name)
-        serialized = [
-            {
-                "id": artist.get("id"),
-                "name": artist.get("name"),
-                "followers": artist.get("followers", {}).get("total", 0),
-                "genres": artist.get("genres", [])[:3],
-            }
-            for artist in artists
-            if artist.get("id")
-        ]
+        serialized = []
+        for idx, artist in enumerate(artists):
+            if not artist.get("id"):
+                continue
+
+            serialized.append(
+                {
+                    "id": artist.get("id"),
+                    "name": artist.get("name"),
+                    "followers": artist.get("followers", {}).get("total", 0),
+                    "genres": creator._infer_genres(artist, use_related=idx < 5),
+                    "image_url": (artist.get("images") or [{}])[0].get("url"),
+                    "country": (
+                        creator._lookup_artist_country(artist.get("name", ""))
+                        if idx < 5
+                        else "Unknown"
+                    )
+                    or "Unknown",
+                }
+            )
         return jsonify(serialized)
     except ValueError as exc:
         return _json_error(str(exc), 400)
