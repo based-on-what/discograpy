@@ -116,7 +116,9 @@ def search_artist():
                 "id": artist.get("id"),
                 "name": artist.get("name"),
                 "followers": artist.get("followers", {}).get("total", 0),
-                "genres": artist.get("genres", [])[:3],
+                "genres": creator._infer_genres(artist),
+                "image_url": (artist.get("images") or [{}])[0].get("url"),
+                "country": creator._lookup_artist_country(artist.get("name", "")) or "Unknown",
             }
             for artist in artists
             if artist.get("id")
