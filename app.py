@@ -116,7 +116,10 @@ def search_artist():
             if not artist.get("id"):
                 continue
 
-            genres = [genre for genre in (artist.get("genres") or []) if genre][:3]
+            mb_data = creator._lookup_artist_metadata(artist.get("name", ""))
+            mb_genres = [genre for genre in (mb_data.get("genres") or []) if genre][:3]
+            spotify_genres = [genre for genre in (artist.get("genres") or []) if genre][:3]
+            genres = mb_genres or spotify_genres
 
             serialized.append(
                 {
@@ -125,8 +128,7 @@ def search_artist():
                     "followers": artist.get("followers", {}).get("total", 0),
                     "genres": genres,
                     "image_url": (artist.get("images") or [{}])[0].get("url"),
-                    # Spotify's artist object does not expose artist country of origin.
-                    "country": "Unknown",
+                    "country": mb_data.get("country") or "Unknown",
                 }
             )
         return jsonify(serialized)

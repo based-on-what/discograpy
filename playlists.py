@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from functools import lru_cache, wraps
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import pycountry
 import requests
 import spotipy
 from dotenv import load_dotenv
@@ -339,6 +340,85 @@ class SpotifyDiscographyCreator:
             raise ValueError("Artist name cannot be empty")
         results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=12)
         return results.get("artists", {}).get("items", [])
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _country_code_to_name(code: str) -> Optional[str]:
+        if not code:
+            return None
+        country = pycountry.countries.get(alpha_2=code.upper())
+        return country.name if country else None
+
+    @staticmethod
+    @lru_cache(maxsize=2048)
+    def _lookup_artist_metadata_cached(artist_name: str) -> Dict[str, Any]:
+        if not artist_name:
+            return {"genres": [], "country": None}
+
+        endpoint = "https://musicbrainz.org/ws/2/artist/"
+        headers = {"User-Agent": "DiscograPY/1.0 (https://github.com/based-on-what/discograpy)"}
+        params = {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5}
+
+        try:
+            response = requests.get(endpoint, params=params, headers=headers, timeout=1.8)
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError):
+            return {"genres": [], "country": None}
+
+        candidates = payload.get("artists", []) if isinstance(payload, dict) else []
+        if not candidates:
+            return {"genres": [], "country": None}
+
+        normalized_name = artist_name.strip().casefold()
+        exact_match = next(
+            (
+                artist
+                for artist in candidates
+                if str(artist.get("name", "")).strip().casefold() == normalized_name
+            ),
+            None,
+        )
+        chosen = exact_match or max(candidates, key=lambda item: SpotifyDiscographyCreator._safe_int(item.get("score", 0)))
+
+        country_name = None
+        area = chosen.get("area")
+        if isinstance(area, dict):
+            area_name = area.get("name")
+            if area_name:
+                country_name = str(area_name)
+
+        if not country_name:
+            begin_area = chosen.get("begin-area")
+            if isinstance(begin_area, dict):
+                area_name = begin_area.get("name")
+                if area_name:
+                    country_name = str(area_name)
+
+        if not country_name:
+            country_name = SpotifyDiscographyCreator._country_code_to_name(str(chosen.get("country", "")))
+
+        raw_genres = chosen.get("genres", [])
+        if not raw_genres:
+            raw_genres = chosen.get("tags", [])
+
+        ranked_genres = sorted(
+            [genre for genre in raw_genres if isinstance(genre, dict) and genre.get("name")],
+            key=lambda genre: SpotifyDiscographyCreator._safe_int(genre.get("count", 0)),
+            reverse=True,
+        )
+        genres = [str(genre.get("name")) for genre in ranked_genres[:3]]
+
+        return {"genres": genres, "country": country_name}
+
+    def _lookup_artist_metadata(self, artist_name: str) -> Dict[str, Any]:
+        return self._lookup_artist_metadata_cached((artist_name or "").strip())
 
     def display_artists(self, artists: List[Dict[str, Any]]) -> None:
         print(f"\nFound {len(artists)} artists:")
