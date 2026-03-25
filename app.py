@@ -150,6 +150,10 @@ def create_playlist():
     # Web flow always creates a playlist (dry-run disabled by product decision).
     dry_run = False
     verbose = bool(data.get("verbose", False))
+    include_live_versions = bool(data.get("include_live_versions", False))
+    include_demos = bool(data.get("include_demos", False))
+    include_remixes = bool(data.get("include_remixes", False))
+    include_instrumentals = bool(data.get("include_instrumentals", False))
 
     if not artist_id or not artist_name:
         return _json_error("artist_id and artist_name are required", 400)
@@ -177,7 +181,14 @@ def create_playlist():
         )
         playlist_name = f"{artist_name} discography {suffix}"
 
-        track_uris = creator._collect_tracks_from_albums(filtered_albums, verbose=verbose)
+        track_uris = creator._collect_tracks_from_albums(
+            filtered_albums,
+            verbose=verbose,
+            include_live_versions=include_live_versions,
+            include_demos=include_demos,
+            include_remixes=include_remixes,
+            include_instrumentals=include_instrumentals,
+        )
         if not track_uris:
             return _json_error("No tracks found for selected albums", 404)
 
