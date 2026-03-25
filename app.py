@@ -171,7 +171,7 @@ def create_playlist():
             return jsonify(auth_response), 401
         if use_artist_image_as_cover and not creator.has_scope("ugc-image-upload"):
             return _json_error(
-                "Current Spotify token does not include 'ugc-image-upload'. Re-authenticate the server account to enable artist cover uploads.",
+                "Current Spotify token does not include 'ugc-image-upload'. Re-authenticate and regenerate SPOTIPY_REFRESH_TOKEN to enable artist cover uploads.",
                 400,
             )
 

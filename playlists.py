@@ -184,7 +184,7 @@ class SpotifyDiscographyCreator:
         self.logger.info("Spotify client initialized successfully")
 
     def has_scope(self, required_scope: str) -> bool:
-        token_info = self.sp.auth_manager.get_cached_token() or {}
+        token_info = self.sp.auth_manager.get_access_token(as_dict=True, check_cache=True) or {}
         raw_scopes = str(token_info.get("scope", "")).split()
         return required_scope in raw_scopes
 
@@ -655,6 +655,11 @@ class SpotifyDiscographyCreator:
                 return True, None
         except (requests.RequestException, SpotifyException, ValueError) as exc:
             self.logger.warning("Failed to set playlist cover from artist image: %s", exc)
+            if isinstance(exc, SpotifyException) and exc.http_status == 401:
+                return (
+                    False,
+                    "Spotify rejected cover upload (401). Re-authenticate with 'ugc-image-upload' and regenerate SPOTIPY_REFRESH_TOKEN.",
+                )
             return False, str(exc)
 
         self.logger.warning("Could not upload artist image as playlist cover (size/availability constraints).")
