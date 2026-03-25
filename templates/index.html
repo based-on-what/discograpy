@@ -120,6 +120,20 @@
         border-color: var(--accent);
         box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.65);
       }
+      .filter-options {
+        margin-top: 16px;
+        display: grid;
+        gap: 10px;
+      }
+      .filter-option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .filter-option input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+      }
       #createBtn { margin-top: 18px; }
 
       .result-actions {
@@ -186,6 +200,26 @@
 
         <h3>Playlist type</h3>
         <div id="albumTypeButtons" class="album-type-grid"></div>
+
+        <h3>Track filters</h3>
+        <div class="filter-options">
+          <label class="filter-option" for="includeLive">
+            <input id="includeLive" type="checkbox" />
+            <span>¿Incluir versiones en vivo?</span>
+          </label>
+          <label class="filter-option" for="includeDemos">
+            <input id="includeDemos" type="checkbox" />
+            <span>¿Incluir demos?</span>
+          </label>
+          <label class="filter-option" for="includeRemixes">
+            <input id="includeRemixes" type="checkbox" />
+            <span>¿Incluir remixes?</span>
+          </label>
+          <label class="filter-option" for="includeInstrumentals">
+            <input id="includeInstrumentals" type="checkbox" />
+            <span>¿Incluir versiones instrumentales?</span>
+          </label>
+        </div>
 
         <button id="createBtn">Create playlist</button>
         <div id="createLoading" class="loading hidden"><div class="spinner"></div><span>Creating your discography playlist…</span></div>
@@ -399,6 +433,10 @@
           artist_id: state.selectedArtist.id,
           artist_name: state.selectedArtist.name,
           album_type_selection: Number(state.selectedAlbumType),
+          include_live_versions: el('includeLive').checked,
+          include_demos: el('includeDemos').checked,
+          include_remixes: el('includeRemixes').checked,
+          include_instrumentals: el('includeInstrumentals').checked,
           dry_run: false,
           verbose: false
         };
@@ -436,6 +474,10 @@
         el('artistsList').innerHTML = '';
         el('searchError').textContent = '';
         el('createError').textContent = '';
+        el('includeLive').checked = false;
+        el('includeDemos').checked = false;
+        el('includeRemixes').checked = false;
+        el('includeInstrumentals').checked = false;
         setSearchLoading(false);
         setCreateLoading(false);
         el('playlistEmbedWrap').classList.add('hidden');

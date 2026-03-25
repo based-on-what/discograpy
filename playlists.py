@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -451,8 +452,75 @@ class SpotifyDiscographyCreator:
         results = self.sp.album_tracks(album_id=album_id, limit=50)
         return self._paginate_spotify_results(results, "items")
 
-    def _collect_tracks_from_albums(self, albums: List[Dict[str, Any]], verbose: bool = False) -> List[str]:
+    @staticmethod
+    def _title_has_live_marker(text: str) -> bool:
+        return bool(re.search(r"\b(live|en vivo|acoustic live)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _title_has_demo_marker(text: str) -> bool:
+        return bool(re.search(r"\b(demo|rough mix|work tape|unreleased demo)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _title_has_remix_marker(text: str) -> bool:
+        return bool(re.search(r"\b(remix|rework|edit|extended mix|club mix|dub mix)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _title_has_instrumental_marker(text: str) -> bool:
+        return bool(re.search(r"\b(instrumental)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _normalize_title_for_comparison(text: str) -> str:
+        normalized = text.lower()
+        normalized = re.sub(r"[\[\(].*?[\]\)]", " ", normalized)
+        normalized = re.sub(
+            r"\b(live|en vivo|acoustic live|demo|rough mix|work tape|unreleased demo|remix|rework|edit|extended mix|club mix|dub mix|instrumental)\b",
+            " ",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+        return " ".join(normalized.split())
+
+    def _track_passes_content_filters(
+        self,
+        track_name: str,
+        album_name: str,
+        include_live_versions: bool,
+        include_demos: bool,
+        include_remixes: bool,
+        include_instrumentals: bool,
+        included_non_instrumental_bases: Set[str],
+    ) -> bool:
+        searchable = f"{track_name} {album_name}"
+        normalized_base = self._normalize_title_for_comparison(track_name)
+
+        if not include_live_versions and self._title_has_live_marker(searchable):
+            return False
+        if not include_demos and self._title_has_demo_marker(searchable):
+            return False
+        if not include_remixes and self._title_has_remix_marker(searchable):
+            return False
+        if self._title_has_instrumental_marker(searchable):
+            if not include_instrumentals:
+                return False
+            if normalized_base and normalized_base not in included_non_instrumental_bases:
+                return False
+            return True
+        if normalized_base:
+            included_non_instrumental_bases.add(normalized_base)
+        return True
+
+    def _collect_tracks_from_albums(
+        self,
+        albums: List[Dict[str, Any]],
+        verbose: bool = False,
+        include_live_versions: bool = False,
+        include_demos: bool = False,
+        include_remixes: bool = False,
+        include_instrumentals: bool = False,
+    ) -> List[str]:
         all_track_uris: List[str] = []
+        included_non_instrumental_bases: Set[str] = set()
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_map = {
                 executor.submit(self._get_album_tracks, album["id"]): album
@@ -469,9 +537,37 @@ class SpotifyDiscographyCreator:
             ordered_results.sort(key=lambda item: item[0])
 
             for _, album_name, tracks in ordered_results:
-                track_uris = [track["uri"] for track in tracks if track.get("uri")]
+                track_uris: List[str] = []
+                skipped_tracks = 0
+                sorted_tracks = sorted(
+                    tracks,
+                    key=lambda item: (self._safe_int(item.get("disc_number", 1)), self._safe_int(item.get("track_number", 0))),
+                )
+                for track in sorted_tracks:
+                    uri = track.get("uri")
+                    track_name = str(track.get("name", ""))
+                    if not uri:
+                        continue
+                    if not self._track_passes_content_filters(
+                        track_name=track_name,
+                        album_name=album_name,
+                        include_live_versions=include_live_versions,
+                        include_demos=include_demos,
+                        include_remixes=include_remixes,
+                        include_instrumentals=include_instrumentals,
+                        included_non_instrumental_bases=included_non_instrumental_bases,
+                    ):
+                        skipped_tracks += 1
+                        continue
+                    track_uris.append(uri)
+
                 all_track_uris.extend(track_uris)
-                self.logger.info("Processed album: %s (%s tracks)", album_name, len(track_uris))
+                self.logger.info(
+                    "Processed album: %s (%s kept, %s filtered)",
+                    album_name,
+                    len(track_uris),
+                    skipped_tracks,
+                )
 
         return all_track_uris
 
