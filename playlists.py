@@ -642,7 +642,10 @@ class SpotifyDiscographyCreator:
             if exc.http_status != 401:
                 raise
             # Force a fresh token and retry once for transient/stale auth states.
-            self.sp.auth_manager.get_access_token(as_dict=False, check_cache=False)
+            try:
+                self.sp.auth_manager.get_access_token(as_dict=False, check_cache=False)
+            except TypeError:
+                self.sp.auth_manager.get_access_token()
             self.sp = spotipy.Spotify(auth_manager=self.sp.auth_manager)
             self._upload_playlist_cover(playlist_id, image_b64)
 
