@@ -36,15 +36,15 @@ def _build_auth_payload(creator: SpotifyDiscographyCreator) -> Dict[str, Any]:
 
 def _ensure_spotify_token(creator: SpotifyDiscographyCreator) -> Optional[Dict[str, Any]]:
     auth_manager = creator.sp.auth_manager
+    refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
+    if refresh_token:
+        refreshed = auth_manager.refresh_access_token(refresh_token)
+        if refreshed:
+            return None
+
     token_info = auth_manager.get_cached_token()
     if token_info:
         return None
-
-    refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
-    if refresh_token:
-        token_info = auth_manager.refresh_access_token(refresh_token)
-        if token_info:
-            return None
 
     return _build_auth_payload(creator)
 
@@ -150,6 +150,12 @@ def create_playlist():
     # Web flow always creates a playlist (dry-run disabled by product decision).
     dry_run = False
     verbose = bool(data.get("verbose", False))
+    include_live_versions = bool(data.get("include_live_versions", False))
+    include_demos = bool(data.get("include_demos", False))
+    include_remixes = bool(data.get("include_remixes", False))
+    include_instrumentals = bool(data.get("include_instrumentals", False))
+    include_duplicate_versions = bool(data.get("include_duplicate_versions", False))
+    use_artist_image_as_cover = bool(data.get("use_artist_image_as_cover", False))
 
     if not artist_id or not artist_name:
         return _json_error("artist_id and artist_name are required", 400)
@@ -163,6 +169,11 @@ def create_playlist():
         auth_response = _ensure_spotify_token(creator)
         if auth_response:
             return jsonify(auth_response), 401
+        if use_artist_image_as_cover and not creator.has_scope("ugc-image-upload"):
+            return _json_error(
+                "Current Spotify token does not include 'ugc-image-upload'. Re-authenticate and regenerate SPOTIPY_REFRESH_TOKEN to enable artist cover uploads.",
+                400,
+            )
 
         album_types = creator.get_album_types_from_selection(album_type_selection)
         albums = creator._get_artist_albums(artist_id=artist_id, album_types=album_types)
@@ -177,18 +188,33 @@ def create_playlist():
         )
         playlist_name = f"{artist_name} discography {suffix}"
 
-        track_uris = creator._collect_tracks_from_albums(filtered_albums, verbose=verbose)
+        track_uris = creator._collect_tracks_from_albums(
+            filtered_albums,
+            verbose=verbose,
+            include_live_versions=include_live_versions,
+            include_demos=include_demos,
+            include_remixes=include_remixes,
+            include_instrumentals=include_instrumentals,
+            include_duplicate_versions=include_duplicate_versions,
+        )
         if not track_uris:
             return _json_error("No tracks found for selected albums", 404)
 
         playlist_id = None
         playlist_url = None
+        cover_applied = False
+        cover_error = None
 
         if not dry_run:
             playlist = creator._create_playlist(playlist_name, creator.PLAYLIST_DESCRIPTION)
             playlist_id = playlist.get("id")
             if playlist_id:
                 creator._add_tracks_to_playlist(playlist_id, track_uris)
+                if use_artist_image_as_cover:
+                    cover_applied, cover_error = creator._set_playlist_cover_from_artist(
+                        playlist_id=playlist_id,
+                        artist_id=artist_id,
+                    )
                 playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
 
         response = {
@@ -198,6 +224,8 @@ def create_playlist():
             "playlist_url": playlist_url,
             "albums_included": len(filtered_albums),
             "tracks_added": len(track_uris),
+            "cover_applied": cover_applied,
+            "cover_error": cover_error,
             "dry_run": dry_run,
         }
         return jsonify(response)
