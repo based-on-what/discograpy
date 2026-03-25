@@ -49,6 +49,10 @@ def _ensure_spotify_token(creator: SpotifyDiscographyCreator) -> Optional[Dict[s
     except Exception as exc:
         creator.logger.warning("Failed to obtain Spotify token from refresh/cache: %s", exc)
 
+    token_info = auth_manager.get_cached_token()
+    if token_info:
+        return None
+
     return _build_auth_payload(creator)
 
 
