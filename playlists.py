@@ -630,6 +630,17 @@ class SpotifyDiscographyCreator:
     def _upload_playlist_cover(self, playlist_id: str, image_b64: str) -> None:
         self.sp.playlist_upload_cover_image(playlist_id, image_b64)
 
+    def _upload_playlist_cover_with_auth_retry(self, playlist_id: str, image_b64: str) -> None:
+        try:
+            self._upload_playlist_cover(playlist_id, image_b64)
+        except SpotifyException as exc:
+            if exc.http_status != 401:
+                raise
+            # Force a fresh token and retry once for transient/stale auth states.
+            self.sp.auth_manager.get_access_token(as_dict=False, check_cache=False)
+            self.sp = spotipy.Spotify(auth_manager=self.sp.auth_manager)
+            self._upload_playlist_cover(playlist_id, image_b64)
+
     def _set_playlist_cover_from_artist(self, playlist_id: str, artist_id: str) -> Tuple[bool, Optional[str]]:
         try:
             artist = self._get_artist(artist_id)
@@ -650,7 +661,7 @@ class SpotifyDiscographyCreator:
                     continue
 
                 encoded = base64.b64encode(response.content).decode("ascii")
-                self._upload_playlist_cover(playlist_id, encoded)
+                self._upload_playlist_cover_with_auth_retry(playlist_id, encoded)
                 self.logger.info("Playlist cover uploaded from artist image: %s", image_url)
                 return True, None
         except (requests.RequestException, SpotifyException, ValueError) as exc:
