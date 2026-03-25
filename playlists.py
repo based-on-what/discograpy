@@ -172,21 +172,26 @@ class SpotifyDiscographyCreator:
 
         # Keep both public and private playlist scopes for future flexibility.
         scope = "playlist-modify-public playlist-modify-private ugc-image-upload"
+        use_cache = os.getenv("SPOTIPY_USE_CACHE", "false").lower() in {"1", "true", "yes"}
         auth = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
             scope=scope,
-            cache_path=".spotify_cache",
-            open_browser=True,
+            cache_path=".spotify_cache" if use_cache else None,
+            open_browser=use_cache,
         )
         self.sp = spotipy.Spotify(auth_manager=auth)
         self.logger.info("Spotify client initialized successfully")
 
     def has_scope(self, required_scope: str) -> bool:
-        token_info = self.sp.auth_manager.get_access_token(as_dict=True, check_cache=True) or {}
-        raw_scopes = str(token_info.get("scope", "")).split()
-        return required_scope in raw_scopes
+        try:
+            token_info = self.sp.auth_manager.get_access_token(as_dict=True, check_cache=True) or {}
+            raw_scopes = str(token_info.get("scope", "")).split()
+            return required_scope in raw_scopes
+        except Exception as exc:
+            self.logger.warning("Unable to validate token scopes: %s", exc)
+            return False
 
     @staticmethod
     def _supports_color() -> bool:

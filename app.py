@@ -36,15 +36,15 @@ def _build_auth_payload(creator: SpotifyDiscographyCreator) -> Dict[str, Any]:
 
 def _ensure_spotify_token(creator: SpotifyDiscographyCreator) -> Optional[Dict[str, Any]]:
     auth_manager = creator.sp.auth_manager
+    refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
+    if refresh_token:
+        refreshed = auth_manager.refresh_access_token(refresh_token)
+        if refreshed:
+            return None
+
     token_info = auth_manager.get_cached_token()
     if token_info:
         return None
-
-    refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
-    if refresh_token:
-        token_info = auth_manager.refresh_access_token(refresh_token)
-        if token_info:
-            return None
 
     return _build_auth_payload(creator)
 
