@@ -183,6 +183,11 @@ class SpotifyDiscographyCreator:
         self.sp = spotipy.Spotify(auth_manager=auth)
         self.logger.info("Spotify client initialized successfully")
 
+    def has_scope(self, required_scope: str) -> bool:
+        token_info = self.sp.auth_manager.get_cached_token() or {}
+        raw_scopes = str(token_info.get("scope", "")).split()
+        return required_scope in raw_scopes
+
     @staticmethod
     def _supports_color() -> bool:
         return sys.stdout.isatty() and os.getenv("NO_COLOR") is None and os.getenv("TERM") != "dumb"
@@ -625,13 +630,13 @@ class SpotifyDiscographyCreator:
     def _upload_playlist_cover(self, playlist_id: str, image_b64: str) -> None:
         self.sp.playlist_upload_cover_image(playlist_id, image_b64)
 
-    def _set_playlist_cover_from_artist(self, playlist_id: str, artist_id: str) -> bool:
+    def _set_playlist_cover_from_artist(self, playlist_id: str, artist_id: str) -> Tuple[bool, Optional[str]]:
         try:
             artist = self._get_artist(artist_id)
             images = artist.get("images", []) if isinstance(artist, dict) else []
             if not images:
                 self.logger.warning("Artist has no Spotify images; skipping playlist cover upload.")
-                return False
+                return False, "Artist has no Spotify images available."
 
             # Try smaller images first to improve odds of meeting Spotify size limits.
             sorted_images = sorted(images, key=lambda img: self._safe_int(img.get("height")))
@@ -647,13 +652,13 @@ class SpotifyDiscographyCreator:
                 encoded = base64.b64encode(response.content).decode("ascii")
                 self._upload_playlist_cover(playlist_id, encoded)
                 self.logger.info("Playlist cover uploaded from artist image: %s", image_url)
-                return True
+                return True, None
         except (requests.RequestException, SpotifyException, ValueError) as exc:
             self.logger.warning("Failed to set playlist cover from artist image: %s", exc)
-            return False
+            return False, str(exc)
 
         self.logger.warning("Could not upload artist image as playlist cover (size/availability constraints).")
-        return False
+        return False, "Could not upload artist image (format/size constraints)."
 
     def _spotify_error_message(self, exc: SpotifyException) -> str:
         messages = {

@@ -169,6 +169,11 @@ def create_playlist():
         auth_response = _ensure_spotify_token(creator)
         if auth_response:
             return jsonify(auth_response), 401
+        if use_artist_image_as_cover and not creator.has_scope("ugc-image-upload"):
+            return _json_error(
+                "Current Spotify token does not include 'ugc-image-upload'. Re-authenticate the server account to enable artist cover uploads.",
+                400,
+            )
 
         album_types = creator.get_album_types_from_selection(album_type_selection)
         albums = creator._get_artist_albums(artist_id=artist_id, album_types=album_types)
@@ -198,6 +203,7 @@ def create_playlist():
         playlist_id = None
         playlist_url = None
         cover_applied = False
+        cover_error = None
 
         if not dry_run:
             playlist = creator._create_playlist(playlist_name, creator.PLAYLIST_DESCRIPTION)
@@ -205,7 +211,10 @@ def create_playlist():
             if playlist_id:
                 creator._add_tracks_to_playlist(playlist_id, track_uris)
                 if use_artist_image_as_cover:
-                    cover_applied = creator._set_playlist_cover_from_artist(playlist_id=playlist_id, artist_id=artist_id)
+                    cover_applied, cover_error = creator._set_playlist_cover_from_artist(
+                        playlist_id=playlist_id,
+                        artist_id=artist_id,
+                    )
                 playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
 
         response = {
@@ -216,6 +225,7 @@ def create_playlist():
             "albums_included": len(filtered_albums),
             "tracks_added": len(track_uris),
             "cover_applied": cover_applied,
+            "cover_error": cover_error,
             "dry_run": dry_run,
         }
         return jsonify(response)

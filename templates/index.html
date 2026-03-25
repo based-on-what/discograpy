@@ -462,6 +462,9 @@
           el('resPlaylist').textContent = result.playlist_name;
           el('resAlbums').textContent = result.albums_included;
           el('resTracks').textContent = result.tracks_added;
+          if (result.cover_applied === false && result.cover_error) {
+            el('createError').textContent = `Playlist created, but cover upload failed: ${result.cover_error}`;
+          }
 
           if (result.playlist_id) {
             el('playlistEmbed').src = `https://open.spotify.com/embed/playlist/${result.playlist_id}?utm_source=generator`;
