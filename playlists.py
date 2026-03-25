@@ -1,8 +1,10 @@
 """DiscograPY CLI for creating Spotify discography playlists."""
 
 import argparse
+import base64
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -169,17 +171,27 @@ class SpotifyDiscographyCreator:
             raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
 
         # Keep both public and private playlist scopes for future flexibility.
-        scope = "playlist-modify-public playlist-modify-private"
+        scope = "playlist-modify-public playlist-modify-private ugc-image-upload"
+        use_cache = os.getenv("SPOTIPY_USE_CACHE", "false").lower() in {"1", "true", "yes"}
         auth = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
             scope=scope,
-            cache_path=".spotify_cache",
-            open_browser=True,
+            cache_path=".spotify_cache" if use_cache else None,
+            open_browser=use_cache,
         )
         self.sp = spotipy.Spotify(auth_manager=auth)
         self.logger.info("Spotify client initialized successfully")
+
+    def has_scope(self, required_scope: str) -> bool:
+        try:
+            token_info = self.sp.auth_manager.get_access_token(as_dict=True, check_cache=True) or {}
+            raw_scopes = str(token_info.get("scope", "")).split()
+            return required_scope in raw_scopes
+        except Exception as exc:
+            self.logger.warning("Unable to validate token scopes: %s", exc)
+            return False
 
     @staticmethod
     def _supports_color() -> bool:
@@ -451,8 +463,85 @@ class SpotifyDiscographyCreator:
         results = self.sp.album_tracks(album_id=album_id, limit=50)
         return self._paginate_spotify_results(results, "items")
 
-    def _collect_tracks_from_albums(self, albums: List[Dict[str, Any]], verbose: bool = False) -> List[str]:
-        all_track_uris: List[str] = []
+    @staticmethod
+    def _title_has_live_marker(text: str) -> bool:
+        return bool(re.search(r"\b(live|en vivo|acoustic live)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _title_has_demo_marker(text: str) -> bool:
+        return bool(re.search(r"\b(demo|rough mix|work tape|unreleased demo)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _title_has_remix_marker(text: str) -> bool:
+        return bool(re.search(r"\b(remix|rework|edit|extended mix|club mix|dub mix)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _title_has_instrumental_marker(text: str) -> bool:
+        return bool(re.search(r"\b(instrumental)\b", text, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _normalize_title_for_comparison(text: str) -> str:
+        normalized = text.lower()
+        normalized = re.sub(r"[\[\(].*?[\]\)]", " ", normalized)
+        normalized = re.sub(
+            r"\b(live|en vivo|acoustic live|demo|rough mix|work tape|unreleased demo|remix|rework|edit|extended mix|club mix|dub mix|instrumental)\b",
+            " ",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+        return " ".join(normalized.split())
+
+    def _album_release_priority(self, album: Dict[str, Any]) -> int:
+        album_type = str(album.get("album_type", "")).lower()
+        if album_type == "album":
+            return 3
+        if self._is_ep(album):
+            return 2
+        if self._is_single(album):
+            return 1
+        return 0
+
+    def _track_passes_content_filters(
+        self,
+        track_name: str,
+        album_name: str,
+        include_live_versions: bool,
+        include_demos: bool,
+        include_remixes: bool,
+        include_instrumentals: bool,
+        included_non_instrumental_bases: Set[str],
+    ) -> bool:
+        searchable = f"{track_name} {album_name}"
+        normalized_base = self._normalize_title_for_comparison(track_name)
+
+        if not include_live_versions and self._title_has_live_marker(searchable):
+            return False
+        if not include_demos and self._title_has_demo_marker(searchable):
+            return False
+        if not include_remixes and self._title_has_remix_marker(searchable):
+            return False
+        if self._title_has_instrumental_marker(searchable):
+            if not include_instrumentals:
+                return False
+            if normalized_base and normalized_base not in included_non_instrumental_bases:
+                return False
+            return True
+        if normalized_base:
+            included_non_instrumental_bases.add(normalized_base)
+        return True
+
+    def _collect_tracks_from_albums(
+        self,
+        albums: List[Dict[str, Any]],
+        verbose: bool = False,
+        include_live_versions: bool = False,
+        include_demos: bool = False,
+        include_remixes: bool = False,
+        include_instrumentals: bool = False,
+        include_duplicate_versions: bool = False,
+    ) -> List[str]:
+        included_non_instrumental_bases: Set[str] = set()
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_map = {
                 executor.submit(self._get_album_tracks, album["id"]): album
@@ -460,20 +549,67 @@ class SpotifyDiscographyCreator:
                 if album.get("id")
             }
 
-            ordered_results: List[Tuple[str, str, List[Dict[str, Any]]]] = []
+            ordered_results: List[Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]]] = []
             for future in as_completed(future_map):
                 album = future_map[future]
                 tracks = future.result()
-                ordered_results.append((album.get("release_date", ""), album.get("name", "Unknown"), tracks))
+                ordered_results.append((album.get("release_date", ""), album, album.get("name", "Unknown"), tracks))
 
             ordered_results.sort(key=lambda item: item[0])
 
-            for _, album_name, tracks in ordered_results:
-                track_uris = [track["uri"] for track in tracks if track.get("uri")]
-                all_track_uris.extend(track_uris)
-                self.logger.info("Processed album: %s (%s tracks)", album_name, len(track_uris))
+            track_candidates: List[Tuple[str, str, int, int]] = []
+            order_index = 0
 
-        return all_track_uris
+            for _, album, album_name, tracks in ordered_results:
+                track_uris: List[str] = []
+                skipped_tracks = 0
+                sorted_tracks = sorted(
+                    tracks,
+                    key=lambda item: (self._safe_int(item.get("disc_number", 1)), self._safe_int(item.get("track_number", 0))),
+                )
+                for track in sorted_tracks:
+                    uri = track.get("uri")
+                    track_name = str(track.get("name", ""))
+                    if not uri:
+                        continue
+                    if not self._track_passes_content_filters(
+                        track_name=track_name,
+                        album_name=album_name,
+                        include_live_versions=include_live_versions,
+                        include_demos=include_demos,
+                        include_remixes=include_remixes,
+                        include_instrumentals=include_instrumentals,
+                        included_non_instrumental_bases=included_non_instrumental_bases,
+                    ):
+                        skipped_tracks += 1
+                        continue
+                    track_uris.append(uri)
+                    normalized_base = self._normalize_title_for_comparison(track_name) or track_name.strip().lower()
+                    track_candidates.append((normalized_base, uri, self._album_release_priority(album), order_index))
+                    order_index += 1
+
+                self.logger.info(
+                    "Processed album: %s (%s kept, %s filtered)",
+                    album_name,
+                    len(track_uris),
+                    skipped_tracks,
+                )
+
+        if include_duplicate_versions:
+            return [uri for _, uri, _, _ in track_candidates]
+
+        best_by_track: Dict[str, Tuple[str, int, int]] = {}
+        for normalized_base, uri, priority, appearance_order in track_candidates:
+            existing = best_by_track.get(normalized_base)
+            if existing is None:
+                best_by_track[normalized_base] = (uri, priority, appearance_order)
+                continue
+            _, existing_priority, _ = existing
+            if priority > existing_priority:
+                best_by_track[normalized_base] = (uri, priority, appearance_order)
+
+        deduped = sorted(best_by_track.values(), key=lambda item: item[2])
+        return [uri for uri, _, _ in deduped]
 
     @retry_on_failure(max_retries=3)
     def _create_playlist(self, playlist_name: str, description: str) -> Dict[str, Any]:
@@ -490,6 +626,66 @@ class SpotifyDiscographyCreator:
         for start in range(0, len(track_uris), batch_size):
             batch = track_uris[start : start + batch_size]
             self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
+
+    @retry_on_failure(max_retries=3)
+    def _get_artist(self, artist_id: str) -> Dict[str, Any]:
+        return self.sp.artist(artist_id)
+
+    @retry_on_failure(max_retries=3)
+    def _upload_playlist_cover(self, playlist_id: str, image_b64: str) -> None:
+        self.sp.playlist_upload_cover_image(playlist_id, image_b64)
+
+    def _upload_playlist_cover_with_auth_retry(self, playlist_id: str, image_b64: str) -> None:
+        try:
+            self._upload_playlist_cover(playlist_id, image_b64)
+        except SpotifyException as exc:
+            if exc.http_status != 401:
+                raise
+            # Force a fresh token and retry once for transient/stale auth states.
+            try:
+                self.sp.auth_manager.get_access_token(as_dict=False, check_cache=False)
+            except TypeError:
+                self.sp.auth_manager.get_access_token()
+            self.sp = spotipy.Spotify(auth_manager=self.sp.auth_manager)
+            self._upload_playlist_cover(playlist_id, image_b64)
+
+    def _set_playlist_cover_from_artist(self, playlist_id: str, artist_id: str) -> Tuple[bool, Optional[str]]:
+        try:
+            artist = self._get_artist(artist_id)
+            images = artist.get("images", []) if isinstance(artist, dict) else []
+            if not images:
+                self.logger.warning("Artist has no Spotify images; skipping playlist cover upload.")
+                return False, "Artist has no Spotify images available."
+
+            # Try smaller images first to improve odds of meeting Spotify size limits.
+            sorted_images = sorted(images, key=lambda img: self._safe_int(img.get("height")))
+            for image in sorted_images:
+                image_url = image.get("url")
+                if not image_url:
+                    continue
+                response = requests.get(image_url, timeout=5)
+                response.raise_for_status()
+                if len(response.content) > 256_000:
+                    continue
+
+                encoded = base64.b64encode(response.content).decode("ascii")
+                self._upload_playlist_cover_with_auth_retry(playlist_id, encoded)
+                self.logger.info("Playlist cover uploaded from artist image: %s", image_url)
+                return True, None
+        except (requests.RequestException, SpotifyException, ValueError) as exc:
+            self.logger.warning("Failed to set playlist cover from artist image: %s", exc)
+            if isinstance(exc, SpotifyException) and exc.http_status == 401:
+                return (
+                    False,
+                    "Spotify rejected cover upload (401). Re-authenticate with 'ugc-image-upload' and regenerate SPOTIPY_REFRESH_TOKEN.",
+                )
+            return False, str(exc)
+        except Exception as exc:
+            self.logger.exception("Unexpected cover upload failure: %s", exc)
+            return False, "Unexpected cover upload failure. Check server logs for details."
+
+        self.logger.warning("Could not upload artist image as playlist cover (size/availability constraints).")
+        return False, "Could not upload artist image (format/size constraints)."
 
     def _spotify_error_message(self, exc: SpotifyException) -> str:
         messages = {
