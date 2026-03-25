@@ -225,14 +225,6 @@
           </label>
         </div>
 
-        <h3>Playlist cover</h3>
-        <div class="filter-options">
-          <label class="filter-option" for="useArtistImageAsCover">
-            <input id="useArtistImageAsCover" type="checkbox" />
-            <span>Use official Spotify artist photo as playlist cover</span>
-          </label>
-        </div>
-
         <button id="createBtn">Create playlist</button>
         <div id="createLoading" class="loading hidden"><div class="spinner"></div><span>Creating your discography playlist…</span></div>
         <div id="createError" class="error"></div>
@@ -450,7 +442,6 @@
           include_remixes: el('includeRemixes').checked,
           include_instrumentals: el('includeInstrumentals').checked,
           include_duplicate_versions: el('includeDuplicateVersions').checked,
-          use_artist_image_as_cover: el('useArtistImageAsCover').checked,
           dry_run: false,
           verbose: false
         };
@@ -462,10 +453,6 @@
           el('resPlaylist').textContent = result.playlist_name;
           el('resAlbums').textContent = result.albums_included;
           el('resTracks').textContent = result.tracks_added;
-          if (result.cover_applied === false && result.cover_error) {
-            el('createError').textContent = `Playlist created, but cover upload failed: ${result.cover_error}`;
-          }
-
           if (result.playlist_id) {
             el('playlistEmbed').src = `https://open.spotify.com/embed/playlist/${result.playlist_id}?utm_source=generator`;
             el('playlistEmbedWrap').classList.remove('hidden');
@@ -496,7 +483,6 @@
         el('includeRemixes').checked = false;
         el('includeInstrumentals').checked = false;
         el('includeDuplicateVersions').checked = false;
-        el('useArtistImageAsCover').checked = false;
         setSearchLoading(false);
         setCreateLoading(false);
         el('playlistEmbedWrap').classList.add('hidden');

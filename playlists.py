@@ -680,6 +680,9 @@ class SpotifyDiscographyCreator:
                     "Spotify rejected cover upload (401). Re-authenticate with 'ugc-image-upload' and regenerate SPOTIPY_REFRESH_TOKEN.",
                 )
             return False, str(exc)
+        except Exception as exc:
+            self.logger.exception("Unexpected cover upload failure: %s", exc)
+            return False, "Unexpected cover upload failure. Check server logs for details."
 
         self.logger.warning("Could not upload artist image as playlist cover (size/availability constraints).")
         return False, "Could not upload artist image (format/size constraints)."
