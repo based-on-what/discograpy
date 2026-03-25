@@ -205,19 +205,31 @@
         <div class="filter-options">
           <label class="filter-option" for="includeLive">
             <input id="includeLive" type="checkbox" />
-            <span>¿Incluir versiones en vivo?</span>
+            <span>Include live versions</span>
           </label>
           <label class="filter-option" for="includeDemos">
             <input id="includeDemos" type="checkbox" />
-            <span>¿Incluir demos?</span>
+            <span>Include demos</span>
           </label>
           <label class="filter-option" for="includeRemixes">
             <input id="includeRemixes" type="checkbox" />
-            <span>¿Incluir remixes?</span>
+            <span>Include remixes</span>
           </label>
           <label class="filter-option" for="includeInstrumentals">
             <input id="includeInstrumentals" type="checkbox" />
-            <span>¿Incluir versiones instrumentales?</span>
+            <span>Include instrumental versions</span>
+          </label>
+          <label class="filter-option" for="includeDuplicateVersions">
+            <input id="includeDuplicateVersions" type="checkbox" />
+            <span>Include duplicate track versions</span>
+          </label>
+        </div>
+
+        <h3>Playlist cover</h3>
+        <div class="filter-options">
+          <label class="filter-option" for="useArtistImageAsCover">
+            <input id="useArtistImageAsCover" type="checkbox" />
+            <span>Use official Spotify artist photo as playlist cover</span>
           </label>
         </div>
 
@@ -437,6 +449,8 @@
           include_demos: el('includeDemos').checked,
           include_remixes: el('includeRemixes').checked,
           include_instrumentals: el('includeInstrumentals').checked,
+          include_duplicate_versions: el('includeDuplicateVersions').checked,
+          use_artist_image_as_cover: el('useArtistImageAsCover').checked,
           dry_run: false,
           verbose: false
         };
@@ -478,6 +492,8 @@
         el('includeDemos').checked = false;
         el('includeRemixes').checked = false;
         el('includeInstrumentals').checked = false;
+        el('includeDuplicateVersions').checked = false;
+        el('useArtistImageAsCover').checked = false;
         setSearchLoading(false);
         setCreateLoading(false);
         el('playlistEmbedWrap').classList.add('hidden');

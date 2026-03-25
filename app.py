@@ -154,6 +154,8 @@ def create_playlist():
     include_demos = bool(data.get("include_demos", False))
     include_remixes = bool(data.get("include_remixes", False))
     include_instrumentals = bool(data.get("include_instrumentals", False))
+    include_duplicate_versions = bool(data.get("include_duplicate_versions", False))
+    use_artist_image_as_cover = bool(data.get("use_artist_image_as_cover", False))
 
     if not artist_id or not artist_name:
         return _json_error("artist_id and artist_name are required", 400)
@@ -188,18 +190,22 @@ def create_playlist():
             include_demos=include_demos,
             include_remixes=include_remixes,
             include_instrumentals=include_instrumentals,
+            include_duplicate_versions=include_duplicate_versions,
         )
         if not track_uris:
             return _json_error("No tracks found for selected albums", 404)
 
         playlist_id = None
         playlist_url = None
+        cover_applied = False
 
         if not dry_run:
             playlist = creator._create_playlist(playlist_name, creator.PLAYLIST_DESCRIPTION)
             playlist_id = playlist.get("id")
             if playlist_id:
                 creator._add_tracks_to_playlist(playlist_id, track_uris)
+                if use_artist_image_as_cover:
+                    cover_applied = creator._set_playlist_cover_from_artist(playlist_id=playlist_id, artist_id=artist_id)
                 playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
 
         response = {
@@ -209,6 +215,7 @@ def create_playlist():
             "playlist_url": playlist_url,
             "albums_included": len(filtered_albums),
             "tracks_added": len(track_uris),
+            "cover_applied": cover_applied,
             "dry_run": dry_run,
         }
         return jsonify(response)

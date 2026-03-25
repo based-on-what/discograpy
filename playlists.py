@@ -1,6 +1,7 @@
 """DiscograPY CLI for creating Spotify discography playlists."""
 
 import argparse
+import base64
 import logging
 import os
 import re
@@ -170,7 +171,7 @@ class SpotifyDiscographyCreator:
             raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
 
         # Keep both public and private playlist scopes for future flexibility.
-        scope = "playlist-modify-public playlist-modify-private"
+        scope = "playlist-modify-public playlist-modify-private ugc-image-upload"
         auth = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
@@ -481,6 +482,16 @@ class SpotifyDiscographyCreator:
         normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
         return " ".join(normalized.split())
 
+    def _album_release_priority(self, album: Dict[str, Any]) -> int:
+        album_type = str(album.get("album_type", "")).lower()
+        if album_type == "album":
+            return 3
+        if self._is_ep(album):
+            return 2
+        if self._is_single(album):
+            return 1
+        return 0
+
     def _track_passes_content_filters(
         self,
         track_name: str,
@@ -518,8 +529,8 @@ class SpotifyDiscographyCreator:
         include_demos: bool = False,
         include_remixes: bool = False,
         include_instrumentals: bool = False,
+        include_duplicate_versions: bool = False,
     ) -> List[str]:
-        all_track_uris: List[str] = []
         included_non_instrumental_bases: Set[str] = set()
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_map = {
@@ -528,15 +539,18 @@ class SpotifyDiscographyCreator:
                 if album.get("id")
             }
 
-            ordered_results: List[Tuple[str, str, List[Dict[str, Any]]]] = []
+            ordered_results: List[Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]]] = []
             for future in as_completed(future_map):
                 album = future_map[future]
                 tracks = future.result()
-                ordered_results.append((album.get("release_date", ""), album.get("name", "Unknown"), tracks))
+                ordered_results.append((album.get("release_date", ""), album, album.get("name", "Unknown"), tracks))
 
             ordered_results.sort(key=lambda item: item[0])
 
-            for _, album_name, tracks in ordered_results:
+            track_candidates: List[Tuple[str, str, int, int]] = []
+            order_index = 0
+
+            for _, album, album_name, tracks in ordered_results:
                 track_uris: List[str] = []
                 skipped_tracks = 0
                 sorted_tracks = sorted(
@@ -560,8 +574,10 @@ class SpotifyDiscographyCreator:
                         skipped_tracks += 1
                         continue
                     track_uris.append(uri)
+                    normalized_base = self._normalize_title_for_comparison(track_name) or track_name.strip().lower()
+                    track_candidates.append((normalized_base, uri, self._album_release_priority(album), order_index))
+                    order_index += 1
 
-                all_track_uris.extend(track_uris)
                 self.logger.info(
                     "Processed album: %s (%s kept, %s filtered)",
                     album_name,
@@ -569,7 +585,21 @@ class SpotifyDiscographyCreator:
                     skipped_tracks,
                 )
 
-        return all_track_uris
+        if include_duplicate_versions:
+            return [uri for _, uri, _, _ in track_candidates]
+
+        best_by_track: Dict[str, Tuple[str, int, int]] = {}
+        for normalized_base, uri, priority, appearance_order in track_candidates:
+            existing = best_by_track.get(normalized_base)
+            if existing is None:
+                best_by_track[normalized_base] = (uri, priority, appearance_order)
+                continue
+            _, existing_priority, _ = existing
+            if priority > existing_priority:
+                best_by_track[normalized_base] = (uri, priority, appearance_order)
+
+        deduped = sorted(best_by_track.values(), key=lambda item: item[2])
+        return [uri for uri, _, _ in deduped]
 
     @retry_on_failure(max_retries=3)
     def _create_playlist(self, playlist_name: str, description: str) -> Dict[str, Any]:
@@ -586,6 +616,44 @@ class SpotifyDiscographyCreator:
         for start in range(0, len(track_uris), batch_size):
             batch = track_uris[start : start + batch_size]
             self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
+
+    @retry_on_failure(max_retries=3)
+    def _get_artist(self, artist_id: str) -> Dict[str, Any]:
+        return self.sp.artist(artist_id)
+
+    @retry_on_failure(max_retries=3)
+    def _upload_playlist_cover(self, playlist_id: str, image_b64: str) -> None:
+        self.sp.playlist_upload_cover_image(playlist_id, image_b64)
+
+    def _set_playlist_cover_from_artist(self, playlist_id: str, artist_id: str) -> bool:
+        try:
+            artist = self._get_artist(artist_id)
+            images = artist.get("images", []) if isinstance(artist, dict) else []
+            if not images:
+                self.logger.warning("Artist has no Spotify images; skipping playlist cover upload.")
+                return False
+
+            # Try smaller images first to improve odds of meeting Spotify size limits.
+            sorted_images = sorted(images, key=lambda img: self._safe_int(img.get("height")))
+            for image in sorted_images:
+                image_url = image.get("url")
+                if not image_url:
+                    continue
+                response = requests.get(image_url, timeout=5)
+                response.raise_for_status()
+                if len(response.content) > 256_000:
+                    continue
+
+                encoded = base64.b64encode(response.content).decode("ascii")
+                self._upload_playlist_cover(playlist_id, encoded)
+                self.logger.info("Playlist cover uploaded from artist image: %s", image_url)
+                return True
+        except (requests.RequestException, SpotifyException, ValueError) as exc:
+            self.logger.warning("Failed to set playlist cover from artist image: %s", exc)
+            return False
+
+        self.logger.warning("Could not upload artist image as playlist cover (size/availability constraints).")
+        return False
 
     def _spotify_error_message(self, exc: SpotifyException) -> str:
         messages = {
