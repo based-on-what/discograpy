@@ -253,6 +253,7 @@
       const state = { selectedArtist: null, selectedAlbumType: 0, albumTypes: [] };
       const el = (id) => document.getElementById(id);
       let searchDebounceId = null;
+      let searchAbortController = null;
 
       const albumTypeDescriptions = {
         0: { title: 'Everything', detail: 'Include absolutely everything available on Spotify: LPs, EPs, Singles, and Compilations.' },
@@ -302,11 +303,12 @@
         };
       }
 
-      async function request(path, payload) {
+      async function request(path, payload, signal) {
         const res = await fetch(path, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal
         });
         const raw = await res.text();
         let data = {};
@@ -407,14 +409,19 @@
           return;
         }
 
+        if (searchAbortController) searchAbortController.abort();
+        searchAbortController = new AbortController();
+        const { signal } = searchAbortController;
+
         setSearchLoading(true);
         try {
-          const artists = await request('/api/search', { artist_name: artistName });
+          const artists = await request('/api/search', { artist_name: artistName }, signal);
           if (!artists.length) {
             el('searchError').textContent = 'No artists found.';
           }
           renderArtists(artists);
         } catch (e) {
+          if (e.name === 'AbortError') return;
           if (e.status === 401 && e.data?.auth_required) {
             showAuth();
           } else {

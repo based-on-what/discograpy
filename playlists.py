@@ -70,7 +70,7 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0) -> Callable[[Call
                     last_exc = exc
                     if exc.http_status == 429:
                         retry_after_header = (exc.headers or {}).get("Retry-After")
-                        retry_after = int(retry_after_header) if retry_after_header else int(delay * (2**attempt))
+                        retry_after = max(2, int(retry_after_header)) if retry_after_header else int(delay * (2**attempt))
                         jitter = random.uniform(0.5, 2.0)
                         logging.getLogger(__name__).warning("Rate limited. Waiting %.1fs", retry_after + jitter)
                         time.sleep(retry_after + jitter)
@@ -187,7 +187,7 @@ class SpotifyDiscographyCreator:
             cache_path=".spotify_cache" if use_cache else None,
             open_browser=use_cache,
         )
-        self.sp = spotipy.Spotify(auth_manager=auth)
+        self.sp = spotipy.Spotify(auth_manager=auth, requests_timeout=15)
         self.logger.info("Spotify client initialized successfully")
 
     def has_scope(self, required_scope: str) -> bool:
@@ -329,7 +329,7 @@ class SpotifyDiscographyCreator:
         print(f"\n⚠ Warning: {missing_text} not found on Spotify for this artist.")
         print("Using available types instead.")
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _paginate_spotify_results(self, initial_results: Dict[str, Any], items_key: str = "items") -> List[Dict[str, Any]]:
         if not initial_results:
             return []
@@ -455,7 +455,7 @@ class SpotifyDiscographyCreator:
         self._display_menu("Options", ["Try another artist search", "Exit"])
         return self._get_numeric_input("\nSelect option (0-1): ", 0, 1) == 0
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _get_artist_albums(self, artist_id: str, album_types: List[str]) -> List[Dict[str, Any]]:
         include_groups = ",".join(album_types)
         results = self.sp.artist_albums(artist_id=artist_id, include_groups=include_groups, limit=50)
@@ -464,7 +464,7 @@ class SpotifyDiscographyCreator:
         valid.sort(key=lambda item: item["release_date"])
         return valid
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _get_album_tracks(self, album_id: str) -> List[Dict[str, Any]]:
         results = self.sp.album_tracks(album_id=album_id, limit=50)
         return self._paginate_spotify_results(results, "items")
@@ -617,7 +617,7 @@ class SpotifyDiscographyCreator:
         deduped = sorted(best_by_track.values(), key=lambda item: item[2])
         return [uri for uri, _, _ in deduped]
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _create_playlist(self, playlist_name: str, description: str) -> Dict[str, Any]:
         if not self.user_id:
             current_user = self.sp.current_user()
@@ -626,18 +626,18 @@ class SpotifyDiscographyCreator:
             self.user_id = current_user["id"]
         return self.sp.user_playlist_create(user=self.user_id, name=playlist_name, public=True, description=description)
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _add_tracks_to_playlist(self, playlist_id: str, track_uris: List[str]) -> None:
         batch_size = 100
         for start in range(0, len(track_uris), batch_size):
             batch = track_uris[start : start + batch_size]
             self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _get_artist(self, artist_id: str) -> Dict[str, Any]:
         return self.sp.artist(artist_id)
 
-    @retry_on_failure(max_retries=3)
+    @retry_on_failure(max_retries=5)
     def _upload_playlist_cover(self, playlist_id: str, image_b64: str) -> None:
         self.sp.playlist_upload_cover_image(playlist_id, image_b64)
 

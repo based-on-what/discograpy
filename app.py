@@ -1,6 +1,8 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
+import requests as _requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from flask_cors import CORS
@@ -120,26 +122,33 @@ def search_artist():
             return jsonify(auth_response), 401
 
         artists = creator.search_artists(artist_name)
-        serialized = []
-        for artist in artists:
-            if not artist.get("id"):
-                continue
+        valid = [a for a in artists if a.get("id")]
 
+        def _enrich(artist: Dict[str, Any]) -> Dict[str, Any]:
             mb_data = creator._lookup_artist_metadata(artist.get("name", ""))
-            mb_genres = [genre for genre in (mb_data.get("genres") or []) if genre][:3]
-            spotify_genres = [genre for genre in (artist.get("genres") or []) if genre][:3]
-            genres = mb_genres or spotify_genres
+            mb_genres = [g for g in (mb_data.get("genres") or []) if g][:3]
+            spotify_genres = [g for g in (artist.get("genres") or []) if g][:3]
+            return {
+                "id": artist.get("id"),
+                "name": artist.get("name"),
+                "followers": artist.get("followers", {}).get("total", 0),
+                "genres": mb_genres or spotify_genres,
+                "image_url": (artist.get("images") or [{}])[0].get("url"),
+                "country": mb_data.get("country") or "Unknown",
+            }
 
-            serialized.append(
-                {
-                    "id": artist.get("id"),
-                    "name": artist.get("name"),
-                    "followers": artist.get("followers", {}).get("total", 0),
-                    "genres": genres,
-                    "image_url": (artist.get("images") or [{}])[0].get("url"),
-                    "country": mb_data.get("country") or "Unknown",
-                }
-            )
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_enrich, a): a["id"] for a in valid}
+            enriched: Dict[str, Any] = {}
+            for f in as_completed(futures):
+                artist_spotify_id = futures[f]
+                try:
+                    enriched[artist_spotify_id] = f.result()
+                except Exception as exc:
+                    app.logger.warning("Enrichment failed for %s: %s", artist_spotify_id, exc)
+
+        serialized = [enriched[a["id"]] for a in valid if a["id"] in enriched]
+        app.logger.info("Search: %d raw → %d enriched for %r", len(valid), len(serialized), artist_name)
         return jsonify(serialized)
     except ValueError as exc:
         return _json_error(str(exc), 400)
@@ -246,6 +255,8 @@ def create_playlist():
         status = exc.http_status or 502
         message = creator._spotify_error_message(exc) if creator else str(exc)
         return _json_error(message, status)
+    except _requests.exceptions.Timeout:
+        return _json_error("Spotify API timed out — rate limited. Wait a minute and try again.", 429)
 
 
 if __name__ == "__main__":
