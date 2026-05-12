@@ -4,6 +4,7 @@ import argparse
 import base64
 import logging
 import os
+import random
 import re
 import sys
 import threading
@@ -70,8 +71,9 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0) -> Callable[[Call
                     if exc.http_status == 429:
                         retry_after_header = (exc.headers or {}).get("Retry-After")
                         retry_after = int(retry_after_header) if retry_after_header else int(delay * (2**attempt))
-                        logging.getLogger(__name__).warning("Rate limited. Waiting %ss", retry_after)
-                        time.sleep(retry_after)
+                        jitter = random.uniform(0.5, 2.0)
+                        logging.getLogger(__name__).warning("Rate limited. Waiting %.1fs", retry_after + jitter)
+                        time.sleep(retry_after + jitter)
                         continue
 
                     if attempt == max_retries - 1:
@@ -546,7 +548,7 @@ class SpotifyDiscographyCreator:
         include_duplicate_versions: bool = False,
     ) -> List[str]:
         included_non_instrumental_bases: Set[str] = set()
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             future_map = {
                 executor.submit(self._get_album_tracks, album["id"]): album
                 for album in albums
