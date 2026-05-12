@@ -61,10 +61,12 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0) -> Callable[[Call
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            last_exc: Optional[SpotifyException] = None
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
                 except SpotifyException as exc:
+                    last_exc = exc
                     if exc.http_status == 429:
                         retry_after_header = (exc.headers or {}).get("Retry-After")
                         retry_after = int(retry_after_header) if retry_after_header else int(delay * (2**attempt))
@@ -84,6 +86,8 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0) -> Callable[[Call
                         wait_time,
                     )
                     time.sleep(wait_time)
+            if last_exc is not None:
+                raise last_exc
 
         return wrapper
 

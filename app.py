@@ -9,6 +9,7 @@ from spotipy.exceptions import SpotifyException
 from playlists import SpotifyDiscographyCreator, configure_logging
 
 load_dotenv()
+configure_logging(verbose=False)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "discograpy-dev-secret")
@@ -19,8 +20,9 @@ def _json_error(message: str, status_code: int = 400):
     return jsonify({"error": message}), status_code
 
 
-def _creator(dry_run: bool = False, verbose: bool = False) -> SpotifyDiscographyCreator:
-    logger = configure_logging(verbose=verbose)
+def _creator(dry_run: bool = False) -> SpotifyDiscographyCreator:
+    import logging
+    logger = logging.getLogger("playlists")
     return SpotifyDiscographyCreator(logger=logger, dry_run=dry_run)
 
 
@@ -172,7 +174,7 @@ def create_playlist():
 
     creator: Optional[SpotifyDiscographyCreator] = None
     try:
-        creator = _creator(dry_run=dry_run, verbose=verbose)
+        creator = _creator(dry_run=dry_run)
         auth_response = _ensure_spotify_token(creator)
         if auth_response:
             return jsonify(auth_response), 401
