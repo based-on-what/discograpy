@@ -134,7 +134,7 @@ def search_artist():
                 "followers": artist.get("followers", {}).get("total", 0),
                 "genres": mb_genres or spotify_genres,
                 "image_url": (artist.get("images") or [{}])[0].get("url"),
-                "country": mb_data.get("country") or "Unknown",
+                "location": mb_data.get("country") or "Unknown",
             }
 
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -206,7 +206,7 @@ def create_playlist():
         )
         playlist_name = f"{artist_name} discography {suffix}"
 
-        track_uris = creator._collect_tracks_from_albums(
+        track_uris, total_ms = creator._collect_tracks_from_albums(
             filtered_albums,
             verbose=verbose,
             include_live_versions=include_live_versions,
@@ -235,6 +235,19 @@ def create_playlist():
                     )
                 playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
 
+        total_seconds = total_ms // 1000
+        days, rem = divmod(total_seconds, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, seconds = divmod(rem, 60)
+        parts = []
+        if days:
+            parts.append(f"{days}d")
+        if hours or days:
+            parts.append(f"{hours}h")
+        parts.append(f"{minutes}m")
+        parts.append(f"{seconds}s")
+        total_length = " ".join(parts)
+
         response = {
             "artist": artist_name,
             "playlist_name": playlist_name,
@@ -242,6 +255,7 @@ def create_playlist():
             "playlist_url": playlist_url,
             "albums_included": len(filtered_albums),
             "tracks_added": len(track_uris),
+            "total_length": total_length,
             "cover_applied": cover_applied,
             "cover_error": cover_error,
             "dry_run": dry_run,

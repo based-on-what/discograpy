@@ -546,8 +546,9 @@ class SpotifyDiscographyCreator:
         include_remixes: bool = False,
         include_instrumentals: bool = False,
         include_duplicate_versions: bool = False,
-    ) -> List[str]:
+    ) -> Tuple[List[str], int]:
         included_non_instrumental_bases: Set[str] = set()
+        uri_to_duration: Dict[str, int] = {}
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_map = {
                 executor.submit(self._get_album_tracks, album["id"]): album
@@ -590,6 +591,7 @@ class SpotifyDiscographyCreator:
                         skipped_tracks += 1
                         continue
                     track_uris.append(uri)
+                    uri_to_duration[uri] = int(track.get("duration_ms") or 0)
                     normalized_base = self._normalize_title_for_comparison(track_name) or track_name.strip().lower()
                     track_candidates.append((normalized_base, uri, self._album_release_priority(album), order_index))
                     order_index += 1
@@ -602,7 +604,8 @@ class SpotifyDiscographyCreator:
                 )
 
         if include_duplicate_versions:
-            return [uri for _, uri, _, _ in track_candidates]
+            uris = [uri for _, uri, _, _ in track_candidates]
+            return uris, sum(uri_to_duration.get(u, 0) for u in uris)
 
         best_by_track: Dict[str, Tuple[str, int, int]] = {}
         for normalized_base, uri, priority, appearance_order in track_candidates:
@@ -615,7 +618,8 @@ class SpotifyDiscographyCreator:
                 best_by_track[normalized_base] = (uri, priority, appearance_order)
 
         deduped = sorted(best_by_track.values(), key=lambda item: item[2])
-        return [uri for uri, _, _ in deduped]
+        uris = [uri for uri, _, _ in deduped]
+        return uris, sum(uri_to_duration.get(u, 0) for u in uris)
 
     @retry_on_failure(max_retries=5)
     def _create_playlist(self, playlist_name: str, description: str) -> Dict[str, Any]:
@@ -779,7 +783,7 @@ class SpotifyDiscographyCreator:
                 playlist_name = f"{selected_artist_name} discography {suffix}"
 
                 with Spinner("Collecting tracks..."):
-                    track_uris = self._collect_tracks_from_albums(filtered_albums, verbose=verbose)
+                    track_uris, _ = self._collect_tracks_from_albums(filtered_albums, verbose=verbose)
 
                 if not track_uris:
                     print("No tracks found to process with the current filters.")

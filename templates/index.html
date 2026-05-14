@@ -236,6 +236,7 @@
         <p><strong>Playlist:</strong> <span id="resPlaylist"></span></p>
         <p><strong>Albums included:</strong> <span id="resAlbums"></span></p>
         <p><strong>Tracks added:</strong> <span id="resTracks"></span></p>
+        <p><strong>Length:</strong> <span id="resLength"></span></p>
         <div class="result-actions">
           <div id="playlistEmbedWrap" class="embed-wrap hidden">
             <iframe id="playlistEmbed" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>
@@ -374,7 +375,7 @@
             ${photo}
             <div>
               <strong>${artist.name}</strong><br>
-              <span class="muted">Followers: ${artist.followers.toLocaleString()} · Genres: ${(artist.genres || []).join(', ') || 'not available'} · Country: ${artist.country || 'Unknown'}</span>
+              <span class="muted">Followers: ${artist.followers.toLocaleString()} · Genres: ${(artist.genres || []).join(', ') || 'not available'} · Location: ${artist.location || 'Unknown'}</span>
             </div>
           `;
           item.onclick = () => {
@@ -460,6 +461,7 @@
           el('resPlaylist').textContent = result.playlist_name;
           el('resAlbums').textContent = result.albums_included;
           el('resTracks').textContent = result.tracks_added;
+          el('resLength').textContent = result.total_length;
           if (result.playlist_id) {
             el('playlistEmbed').src = `https://open.spotify.com/embed/playlist/${result.playlist_id}?utm_source=generator`;
             el('playlistEmbedWrap').classList.remove('hidden');
