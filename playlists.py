@@ -21,11 +21,24 @@ from dotenv import load_dotenv
 from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyOAuth
 
+_RE_LIVE = re.compile(r"\b(live|en vivo|acoustic live)\b", re.IGNORECASE)
+_RE_DEMO = re.compile(r"\b(demo|rough mix|work tape|unreleased demo)\b", re.IGNORECASE)
+_RE_REMIX = re.compile(r"\b(remix|rework|edit|extended mix|club mix|dub mix)\b", re.IGNORECASE)
+_RE_INSTRUMENTAL = re.compile(r"\b(instrumental)\b", re.IGNORECASE)
+_RE_BRACKETS = re.compile(r"[\[\(].*?[\]\)]")
+_RE_KEYWORDS = re.compile(
+    r"\b(live|en vivo|acoustic live|demo|rough mix|work tape|unreleased demo|"
+    r"remix|rework|edit|extended mix|club mix|dub mix|instrumental)\b",
+    re.IGNORECASE,
+)
+_RE_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
 
 def configure_logging(verbose: bool = False) -> logging.Logger:
     """Configure application logging with file + console handlers."""
     root = logging.getLogger()
-    root.handlers.clear()
+    if root.handlers:
+        return logging.getLogger(__name__)
     root.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -140,13 +153,48 @@ class SpotifyDiscographyCreator:
     """Spotify discography playlist creator with filtering and robust error handling."""
 
     ALBUM_TYPE_CONFIGS: Dict[int, Dict[str, Any]] = {
-        0: {"types": ["album", "single", "compilation"], "suffix": "[EVERYTHING]", "description": "everything"},
-        1: {"types": ["album"], "suffix": "[ALBUMS]", "description": "albums"},
-        2: {"types": ["single"], "suffix": "[EPs]", "description": "EPs"},
-        3: {"types": ["single"], "suffix": "[SINGLES]", "description": "singles"},
-        4: {"types": ["album", "single", "compilation"], "suffix": "[COMPILATIONS]", "description": "compilations"},
-        5: {"types": ["single"], "suffix": "[EPs + SINGLES]", "description": "EPs and singles"},
-        6: {"types": ["album", "single"], "suffix": "[ALBUMS + EPs + SINGLES]", "description": "albums, EPs, and singles"},
+        0: {
+            "types": ["album", "single", "compilation"],
+            "suffix": "[EVERYTHING]",
+            "title": "Everything",
+            "description": "Include absolutely everything available on Spotify: LPs, EPs, Singles, and Compilations.",
+        },
+        1: {
+            "types": ["album"],
+            "suffix": "[ALBUMS]",
+            "title": "LPs only",
+            "description": "Include full-length albums only (LPs / album releases).",
+        },
+        2: {
+            "types": ["single"],
+            "suffix": "[EPs]",
+            "title": "EPs only",
+            "description": "Include only EP releases (single-type releases with 4-7 tracks).",
+        },
+        3: {
+            "types": ["single"],
+            "suffix": "[SINGLES]",
+            "title": "Singles only",
+            "description": "Include only singles (single-type releases with up to 3 tracks).",
+        },
+        4: {
+            "types": ["album", "single", "compilation"],
+            "suffix": "[COMPILATIONS]",
+            "title": "Compilations only",
+            "description": "Include only compilation releases.",
+        },
+        5: {
+            "types": ["single"],
+            "suffix": "[EPs + SINGLES]",
+            "title": "EPs + Singles",
+            "description": "Include EP releases and Singles, excluding LPs and Compilations.",
+        },
+        6: {
+            "types": ["album", "single"],
+            "suffix": "[ALBUMS + EPs + SINGLES]",
+            "title": "LPs + EPs + Singles",
+            "description": "Include LP albums, EP releases, and Singles (no Compilations).",
+        },
     }
 
     PLAYLIST_DESCRIPTION = (
@@ -158,8 +206,6 @@ class SpotifyDiscographyCreator:
         self.logger = logger
         self.dry_run = dry_run
         self.user_id: Optional[str] = None
-
-        load_dotenv()
         self._setup_spotify_client()
 
     def _setup_spotify_client(self) -> None:
@@ -248,7 +294,7 @@ class SpotifyDiscographyCreator:
         return self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])["types"]
 
     def get_selection_description(self, selection: int) -> str:
-        return self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])["description"]
+        return self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])["title"]
 
     def get_playlist_suffix_from_selection(self, selection: int, actual_types: Optional[Set[str]] = None) -> str:
         config = self.ALBUM_TYPE_CONFIGS.get(selection, self.ALBUM_TYPE_CONFIGS[0])
@@ -326,8 +372,7 @@ class SpotifyDiscographyCreator:
 
         map_name = {"album": "Albums", "ep": "EPs", "single": "Singles"}
         missing_text = ", ".join(map_name[item] for item in sorted(missing))
-        print(f"\n⚠ Warning: {missing_text} not found on Spotify for this artist.")
-        print("Using available types instead.")
+        self.logger.warning("%s not found on Spotify for this artist. Using available types instead.", missing_text)
 
     @retry_on_failure(max_retries=5)
     def _paginate_spotify_results(self, initial_results: Dict[str, Any], items_key: str = "items") -> List[Dict[str, Any]]:
@@ -471,31 +516,25 @@ class SpotifyDiscographyCreator:
 
     @staticmethod
     def _title_has_live_marker(text: str) -> bool:
-        return bool(re.search(r"\b(live|en vivo|acoustic live)\b", text, flags=re.IGNORECASE))
+        return bool(_RE_LIVE.search(text))
 
     @staticmethod
     def _title_has_demo_marker(text: str) -> bool:
-        return bool(re.search(r"\b(demo|rough mix|work tape|unreleased demo)\b", text, flags=re.IGNORECASE))
+        return bool(_RE_DEMO.search(text))
 
     @staticmethod
     def _title_has_remix_marker(text: str) -> bool:
-        return bool(re.search(r"\b(remix|rework|edit|extended mix|club mix|dub mix)\b", text, flags=re.IGNORECASE))
+        return bool(_RE_REMIX.search(text))
 
     @staticmethod
     def _title_has_instrumental_marker(text: str) -> bool:
-        return bool(re.search(r"\b(instrumental)\b", text, flags=re.IGNORECASE))
+        return bool(_RE_INSTRUMENTAL.search(text))
 
     @staticmethod
     def _normalize_title_for_comparison(text: str) -> str:
-        normalized = text.lower()
-        normalized = re.sub(r"[\[\(].*?[\]\)]", " ", normalized)
-        normalized = re.sub(
-            r"\b(live|en vivo|acoustic live|demo|rough mix|work tape|unreleased demo|remix|rework|edit|extended mix|club mix|dub mix|instrumental)\b",
-            " ",
-            normalized,
-            flags=re.IGNORECASE,
-        )
-        normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+        normalized = _RE_BRACKETS.sub(" ", text.lower())
+        normalized = _RE_KEYWORDS.sub(" ", normalized)
+        normalized = _RE_NON_ALNUM.sub(" ", normalized)
         return " ".join(normalized.split())
 
     def _album_release_priority(self, album: Dict[str, Any]) -> int:
@@ -516,7 +555,7 @@ class SpotifyDiscographyCreator:
         include_demos: bool,
         include_remixes: bool,
         include_instrumentals: bool,
-        included_non_instrumental_bases: Set[str],
+        all_non_instrumental_bases: Set[str],
     ) -> bool:
         searchable = f"{track_name} {album_name}"
         normalized_base = self._normalize_title_for_comparison(track_name)
@@ -530,11 +569,10 @@ class SpotifyDiscographyCreator:
         if self._title_has_instrumental_marker(searchable):
             if not include_instrumentals:
                 return False
-            if normalized_base and normalized_base not in included_non_instrumental_bases:
+            # Use pre-computed set — order of album processing doesn't matter.
+            if normalized_base and normalized_base not in all_non_instrumental_bases:
                 return False
             return True
-        if normalized_base:
-            included_non_instrumental_bases.add(normalized_base)
         return True
 
     def _collect_tracks_from_albums(
@@ -547,9 +585,9 @@ class SpotifyDiscographyCreator:
         include_instrumentals: bool = False,
         include_duplicate_versions: bool = False,
     ) -> Tuple[List[str], int]:
-        included_non_instrumental_bases: Set[str] = set()
         uri_to_duration: Dict[str, int] = {}
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        max_album_workers = min(8, len(albums) or 1)
+        with ThreadPoolExecutor(max_workers=max_album_workers) as executor:
             future_map = {
                 executor.submit(self._get_album_tracks, album["id"]): album
                 for album in albums
@@ -559,10 +597,39 @@ class SpotifyDiscographyCreator:
             ordered_results: List[Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]]] = []
             for future in as_completed(future_map):
                 album = future_map[future]
-                tracks = future.result()
+                try:
+                    tracks = future.result()
+                except Exception as exc:
+                    self.logger.warning(
+                        "Skipping album %r — failed to fetch tracks: %s",
+                        album.get("name", album.get("id")),
+                        exc,
+                    )
+                    continue
                 ordered_results.append((album.get("release_date", ""), album, album.get("name", "Unknown"), tracks))
 
             ordered_results.sort(key=lambda item: item[0])
+
+            # Pre-compute normalized titles once per track across all albums.
+            # Reused for both the instrumental-base set and deduplication.
+            track_norm_cache: Dict[str, str] = {}
+
+            def _norm(name: str) -> str:
+                if name not in track_norm_cache:
+                    track_norm_cache[name] = self._normalize_title_for_comparison(name)
+                return track_norm_cache[name]
+
+            # Pass 1: collect all non-instrumental base names across every album so
+            # instrumental matching is independent of album chronological order.
+            all_non_instrumental_bases: Set[str] = set()
+            for _, _album, _album_name, _tracks in ordered_results:
+                for _track in _tracks:
+                    _name = str(_track.get("name", ""))
+                    _searchable = f"{_name} {_album_name}"
+                    if not self._title_has_instrumental_marker(_searchable):
+                        _base = _norm(_name)
+                        if _base:
+                            all_non_instrumental_bases.add(_base)
 
             track_candidates: List[Tuple[str, str, int, int]] = []
             order_index = 0
@@ -586,13 +653,13 @@ class SpotifyDiscographyCreator:
                         include_demos=include_demos,
                         include_remixes=include_remixes,
                         include_instrumentals=include_instrumentals,
-                        included_non_instrumental_bases=included_non_instrumental_bases,
+                        all_non_instrumental_bases=all_non_instrumental_bases,
                     ):
                         skipped_tracks += 1
                         continue
                     track_uris.append(uri)
                     uri_to_duration[uri] = int(track.get("duration_ms") or 0)
-                    normalized_base = self._normalize_title_for_comparison(track_name) or track_name.strip().lower()
+                    normalized_base = _norm(track_name) or track_name.strip().lower()
                     track_candidates.append((normalized_base, uri, self._album_release_priority(album), order_index))
                     order_index += 1
 
@@ -630,12 +697,21 @@ class SpotifyDiscographyCreator:
             self.user_id = current_user["id"]
         return self.sp.user_playlist_create(user=self.user_id, name=playlist_name, public=True, description=description)
 
-    @retry_on_failure(max_retries=5)
     def _add_tracks_to_playlist(self, playlist_id: str, track_uris: List[str]) -> None:
         batch_size = 100
-        for start in range(0, len(track_uris), batch_size):
-            batch = track_uris[start : start + batch_size]
-            self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
+        batches = [track_uris[i : i + batch_size] for i in range(0, len(track_uris), batch_size)]
+        if len(batches) <= 1:
+            if batches:
+                self._add_batch_with_retry(playlist_id, batches[0])
+            return
+        with ThreadPoolExecutor(max_workers=min(4, len(batches))) as pool:
+            futures = [pool.submit(self._add_batch_with_retry, playlist_id, b) for b in batches]
+            for f in as_completed(futures):
+                f.result()
+
+    @retry_on_failure(max_retries=5)
+    def _add_batch_with_retry(self, playlist_id: str, batch: List[str]) -> None:
+        self.sp.playlist_add_items(playlist_id=playlist_id, items=batch)
 
     @retry_on_failure(max_retries=5)
     def _get_artist(self, artist_id: str) -> Dict[str, Any]:

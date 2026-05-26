@@ -255,16 +255,8 @@
       const el = (id) => document.getElementById(id);
       let searchDebounceId = null;
       let searchAbortController = null;
+      let selectedArtistEl = null;
 
-      const albumTypeDescriptions = {
-        0: { title: 'Everything', detail: 'Include absolutely everything available on Spotify: LPs, EPs, Singles, and Compilations.' },
-        1: { title: 'LPs only', detail: 'Include full-length albums only (LPs / album releases).' },
-        2: { title: 'EPs only', detail: 'Include only EP releases (single-type releases with 4–7 tracks).' },
-        3: { title: 'Singles only', detail: 'Include only singles (single-type releases with up to 3 tracks).' },
-        4: { title: 'Compilations only', detail: 'Include only compilation releases.' },
-        5: { title: 'EPs + Singles', detail: 'Include EP releases and Singles, excluding LPs and Compilations.' },
-        6: { title: 'LPs + EPs + Singles', detail: 'Include LP albums, EP releases, and Singles (no Compilations).' }
-      };
 
       function applyTheme(mode) {
         const dark = mode !== 'light';
@@ -336,27 +328,49 @@
         el('createBtn').disabled = isLoading;
       }
 
+      let _albumTypeBtns = [];
+
       function renderAlbumTypeButtons() {
         const wrap = el('albumTypeButtons');
-        wrap.innerHTML = '';
-
-        state.albumTypes.forEach((item) => {
-          const text = albumTypeDescriptions[item.index] || { title: item.label, detail: item.description || '' };
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = `album-type-btn ${state.selectedAlbumType === item.index ? 'selected' : ''}`;
-          btn.innerHTML = `<strong>${text.title}</strong><small>${text.detail}</small>`;
-          btn.onclick = () => {
-            state.selectedAlbumType = item.index;
-            renderAlbumTypeButtons();
-          };
-          wrap.appendChild(btn);
-        });
+        if (_albumTypeBtns.length === 0) {
+          wrap.innerHTML = '';
+          _albumTypeBtns = state.albumTypes.map((item) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'album-type-btn';
+            btn.dataset.index = item.index;
+            const title = document.createElement('strong');
+            title.textContent = item.title || item.label;
+            const detail = document.createElement('small');
+            detail.textContent = item.description || '';
+            btn.appendChild(title);
+            btn.appendChild(detail);
+            btn.onclick = () => {
+              _albumTypeBtns.forEach((b) => b.classList.remove('selected'));
+              btn.classList.add('selected');
+              state.selectedAlbumType = item.index;
+            };
+            wrap.appendChild(btn);
+            return btn;
+          });
+        }
+        _albumTypeBtns.forEach((b) => b.classList.toggle('selected', Number(b.dataset.index) === state.selectedAlbumType));
       }
 
       async function loadAlbumTypes() {
+        const CACHE_KEY = 'discograpy-album-types';
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) {
+          try {
+            state.albumTypes = JSON.parse(cached);
+            state.selectedAlbumType = 0;
+            renderAlbumTypeButtons();
+            return;
+          } catch (_) {}
+        }
         const res = await fetch('/api/album-types');
         const data = await res.json();
+        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
         state.albumTypes = data;
         state.selectedAlbumType = 0;
         renderAlbumTypeButtons();
@@ -368,18 +382,35 @@
         artists.forEach((artist) => {
           const item = document.createElement('div');
           item.className = 'artist-item';
-          const photo = artist.image_url
-            ? `<img class="artist-photo" src="${artist.image_url}" alt="Photo of ${artist.name}" loading="lazy" />`
-            : `<div class="artist-photo-placeholder">🎵</div>`;
-          item.innerHTML = `
-            ${photo}
-            <div>
-              <strong>${artist.name}</strong><br>
-              <span class="muted">Followers: ${artist.followers.toLocaleString()} · Genres: ${(artist.genres || []).join(', ') || 'not available'} · Location: ${artist.location || 'Unknown'}</span>
-            </div>
-          `;
+
+          if (artist.image_url) {
+            const img = document.createElement('img');
+            img.className = 'artist-photo';
+            img.src = artist.image_url;
+            img.alt = `Photo of ${artist.name}`;
+            img.loading = 'lazy';
+            item.appendChild(img);
+          } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'artist-photo-placeholder';
+            placeholder.textContent = '🎵';
+            item.appendChild(placeholder);
+          }
+
+          const info = document.createElement('div');
+          const name = document.createElement('strong');
+          name.textContent = artist.name;
+          const meta = document.createElement('span');
+          meta.className = 'muted';
+          meta.textContent = `Followers: ${artist.followers.toLocaleString()} · Genres: ${(artist.genres || []).join(', ') || 'not available'} · Location: ${artist.location || 'Unknown'}`;
+          info.appendChild(name);
+          info.appendChild(document.createElement('br'));
+          info.appendChild(meta);
+          item.appendChild(info);
+
           item.onclick = () => {
-            Array.from(document.querySelectorAll('.artist-item')).forEach((n) => n.classList.remove('selected'));
+            if (selectedArtistEl) selectedArtistEl.classList.remove('selected');
+            selectedArtistEl = item;
             item.classList.add('selected');
             state.selectedArtist = artist;
             el('selectedArtist').textContent = artist.name;
@@ -483,6 +514,7 @@
       function onReset() {
         state.selectedArtist = null;
         state.selectedAlbumType = 0;
+        selectedArtistEl = null;
         el('artistInput').value = '';
         el('artistsList').innerHTML = '';
         el('searchError').textContent = '';
