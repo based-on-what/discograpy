@@ -1,637 +1,352 @@
-# 🎵 DiscograPY — Spotify Discography Playlist Creator
+# DiscograPY — Spotify Discography Playlist Creator
 
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-DiscograPY includes:
+> [Versión en Español](README.es.md)
 
-- A **web app** (Flask + HTML/CSS/JS vanilla) to search artists and create discography playlists.
-- A **CLI script** (`playlists.py`) with the same Spotify discography logic.
-- Deployment config for **Railway**.
+DiscograPY creates Spotify discography playlists. It ships as:
 
-The project uses the **Spotify Web API** through [Spotipy](https://spotipy.readthedocs.io/) and is optimized for performance, pagination, retries, and logging.
+- A **web app** (Flask + vanilla HTML/CSS/JS) — search artists, configure filters, get a playlist with embedded preview.
+- A **CLI** (`playlists.py`) — same core logic, interactive terminal flow.
 
-## 🌐 Production
+Built on the [Spotify Web API](https://developer.spotify.com/documentation/web-api/) via [Spotipy](https://spotipy.readthedocs.io/). Artist metadata (genres, country) enriched from [MusicBrainz](https://musicbrainz.org/).
 
-Live app: **https://discograpy-production.up.railway.app/**
+## Live app
 
-## 📋 Table of Contents
-
-- [Production](#-production)
-- [Features](#-features)
-- [Requirements](#️-requirements)
-- [Installation](#-installation)
-- [Setup](#-setup)
-- [Usage (Web)](#-usage-web)
-- [Usage (CLI)](#-usage-cli)
-- [Project Structure](#-project-structure)
-- [Logging](#-logging)
+**[discograpy-production.up.railway.app](https://discograpy-production.up.railway.app/)**
 
 ---
 
-## ✨ Features
+## Table of Contents
 
-- Search for any artist on Spotify and select from all matching results.  
-- Web interface with 3-step flow (Search → Configure → Result).
-- Spotify embedded playlist preview after creation.
-- **Choose album types:** Everything, Albums only, EPs only, Singles only, Compilations only, or combinations (EPs + Singles, Albums + EPs + Singles).
-- Retrieve **all albums** (with pagination support).  
-- **Smart filtering:** Distinguishes between albums, EPs (4-7 tracks), and singles (1-3 tracks).
-- **Intelligent missing type handling:** Warns users when selected album types aren't available and adjusts playlist names accordingly.
-- Collect **all tracks** from those albums using **threaded requests** for speed.  
-- **Retry logic with exponential backoff** to handle API failures and rate limits gracefully.  
-- Create a **new playlist in your account** with the full discography or selected type.  
-- Tracks added in **correct release order**.  
-- Professional **logging system** with timestamps, log levels, and *UTF-8 encoding support* for international characters.  
-- Robust **error handling** to deal with Spotify API quirks, with interactive retry options.
-
----
-
-## ⚙️ Requirements
-
-- **Python 3.8+**  
-- **Spotify Developer Account** with API credentials  
-- Required Python packages:
-  - `flask` (web server)
-  - `gunicorn` (production WSGI server)
-  - `spotipy` (Spotify Web API wrapper)
-  - `python-dotenv` (Environment variable management)
-  - `flask-cors` (CORS support for API)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Setup](#setup)
+- [Getting a Refresh Token](#getting-a-refresh-token)
+- [Usage — Web](#usage--web)
+- [Usage — CLI](#usage--cli)
+- [Content Filters](#content-filters)
+- [Project Structure](#project-structure)
+- [Logging](#logging)
+- [Deployment](#deployment)
+- [Notes & Limitations](#notes--limitations)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ---
 
-## 📦 Installation
+## Features
 
-### Option 1: Using requirements.txt (Recommended)
+- Search any artist; results show follower count, genres, and country (via MusicBrainz enrichment).
+- **7 album type modes:** Everything, LPs only, EPs only, Singles only, Compilations only, EPs + Singles, LPs + EPs + Singles.
+- EP detection by track count (4–7 tracks = EP, 1–3 = Single) since Spotify reports both as `single`.
+- Smart playlist suffix adjusted when requested types are missing for an artist.
+- **Content filters** (web): exclude or include live versions, demos, remixes, and instrumentals per request.
+- **Smart deduplication** (default on): keeps the best version of each track by normalized title and album release priority; eliminates regional duplicates and deluxe-edition redundancy.
+- Parallel album track fetching (`ThreadPoolExecutor`, up to 8 workers).
+- Tracks added in chronological release order.
+- Optional **artist image as playlist cover** (`ugc-image-upload` scope required).
+- **Dry-run mode** (CLI): full discovery and filtering without creating the playlist.
+- Retry logic with exponential backoff and `Retry-After` header support for HTTP 429.
+- UTF-8 logging to file and console; compatible with non-Latin artist names.
+
+---
+
+## Requirements
+
+- Python 3.8+
+- Spotify Developer account with app credentials
+- Python packages: `flask`, `gunicorn`, `spotipy`, `python-dotenv`, `flask-cors`, `requests`, `pycountry`
+
+---
+
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Option 2: Manual installation
-
-```bash
-pip install flask gunicorn spotipy python-dotenv flask-cors
-```
-
 ---
 
-## 📂 Setup
+## Setup
 
-### Step 1: Create Spotify Developer Application
+### 1. Create a Spotify Developer app
 
-1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Log in with your Spotify account
-3. Click **"Create an App"**
-4. Fill in the app name and description
-5. Accept the Terms of Service
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
+2. Click **Create an App**, fill in name and description.
+3. After creation, note your **Client ID** and **Client Secret**.
 
-### Step 2: Get Your Credentials
+### 2. Add Redirect URIs
 
-After creating your app, you'll see:
-- **Client ID**
-- **Client Secret** (click "Show Client Secret" to reveal)
+In app settings → **Edit Settings** → **Redirect URIs**, add:
 
-### Step 3: Set Redirect URI
+For local development:
 
-1. In your app settings, click **"Edit Settings"**
-2. Add the following to **Redirect URIs**:
-
-For local web development:
-
-```
+```text
 http://127.0.0.1:5000/callback
 ```
 
 For production (Railway):
 
-```
+```text
 https://discograpy-production.up.railway.app/callback
 ```
 
-3. Click **"Add"** and then **"Save"**
+Click **Add** then **Save** for each.
 
-### Step 4: Configure Environment Variables
+### 3. Configure environment variables
 
-Create a `.env` file in the project root directory:
+Create a `.env` file in the project root:
 
 ```env
 SPOTIPY_CLIENT_ID=your_client_id_here
 SPOTIPY_CLIENT_SECRET=your_client_secret_here
 SPOTIPY_REDIRECT_URI=http://127.0.0.1:5000/callback
-SPOTIPY_REFRESH_TOKEN=your_creator_account_refresh_token_here
+SPOTIPY_REFRESH_TOKEN=your_refresh_token_here
+
+# Optional
+FLASK_SECRET_KEY=change-me-in-production
+SPOTIPY_USE_CACHE=false
 ```
 
-> `SPOTIPY_REFRESH_TOKEN` is recommended for production if you want server-side playlist creation without forcing end users to authenticate.
+`SPOTIPY_REFRESH_TOKEN` — required for the web app (server-side playlist creation). Obtain it with `get_token.py` (see below). Without it, each server restart requires re-authentication.
 
-⚠️ **Important:** Never commit your `.env` file to version control. It's already included in `.gitignore`.
+`SPOTIPY_USE_CACHE` — set to `true` to cache the OAuth token in `.spotify_cache` during local development. Keep `false` for production.
+
+> Never commit `.env` to version control — it is listed in `.gitignore`.
 
 ---
 
-## 🚀 Usage (Web)
+## Getting a Refresh Token
 
-Run the Flask app locally:
+Run this once locally to authenticate and print your refresh token:
+
+```bash
+python get_token.py
+```
+
+A browser window will open for Spotify OAuth. After authorizing, the terminal prints:
+
+```text
+REFRESH TOKEN: AQA...
+```
+
+Copy that value into `SPOTIPY_REFRESH_TOKEN` in your `.env`.
+
+Required scopes granted: `playlist-modify-public playlist-modify-private ugc-image-upload`.
+
+---
+
+## Usage — Web
+
+Start locally:
 
 ```bash
 python app.py
 ```
 
-Open:
+Open `http://127.0.0.1:5000`.
 
-```text
-http://127.0.0.1:5000
-```
-
-For production-like local run:
+Production-style local run:
 
 ```bash
 gunicorn app:app --bind 0.0.0.0:5000
 ```
 
-## 🚀 Usage (CLI)
+### Flow
 
-Run the script:
-
-```bash
-python playlists.py
-```
-
-### Interactive Prompts
-
-1. **Enter artist name:**
-   ```
-   Enter artist name: System of a Down
-   ```
-
-2. **Select from matching artists** (if multiple found):
-   ```
-   Found 2 artists:
-   1. System of a Down
-   2. System of a Down Tribute
-   
-   Select artist number (1-2): 1
-   ```
-
-3. The script will then:
-   - ✅ Prompt for album type selection (Everything, Albums only, EPs only, Singles only, Compilations only, EPs + Singles, or Albums + EPs + Singles)
-   - ✅ Fetch all albums by that artist matching the selected type (with pagination)
-   - ✅ Check for missing album types and warn if selected types aren't available
-   - ✅ Adjust playlist name based on actual content found
-   - ✅ Sort them by release date
-   - ✅ Collect all tracks from each album (using parallel processing with 5 concurrent workers)
-   - ✅ Create a new playlist: `[Artist Name] discography [TYPE]`
-   - ✅ Add all tracks in chronological order
+1. **Search** — type an artist name; results show name, followers, genres, and country.
+2. **Configure** — select album type, toggle content filters (live, demos, remixes, instrumentals, duplicate versions), optionally use artist image as cover.
+3. **Result** — embedded Spotify playlist preview after creation.
 
 ---
 
-## 📁 Project Structure
+## Usage — CLI
+
+```bash
+python playlists.py [--verbose] [--dry-run]
+```
+
+| Flag | Effect |
+|---|---|
+| `-v` / `--verbose` | Debug-level logging to console |
+| `--dry-run` | Discover and filter tracks; skip playlist creation |
+
+### Interactive flow
+
+1. Enter artist name.
+2. Select from matching results (shows follower count and genres).
+3. Choose album type (0–6).
+4. Playlist is created and the URL is printed.
+
+**Note:** CLI uses default content filter settings — live versions, demos, remixes, and instrumentals are excluded; smart deduplication is applied. To override filters, use the web interface.
+
+### Album type options
+
+| # | Label | What's included |
+|---|---|---|
+| 0 | Everything | All types combined |
+| 1 | LPs only | Full-length albums |
+| 2 | EPs only | Single-type releases with 4–7 tracks |
+| 3 | Singles only | Single-type releases with 1–3 tracks |
+| 4 | Compilations only | Compilation releases |
+| 5 | EPs + Singles | EPs and Singles, no LPs or Compilations |
+| 6 | LPs + EPs + Singles | Everything except Compilations |
+
+---
+
+## Content Filters
+
+Available in the web interface (passed as booleans to `POST /api/create`):
+
+| Filter | Default | Effect when enabled |
+|---|---|---|
+| `include_live_versions` | off | Include tracks/albums with "live", "en vivo" etc. in the name |
+| `include_demos` | off | Include tracks/albums with "demo", "rough mix" etc. |
+| `include_remixes` | off | Include remixes, reworks, edits, extended mixes |
+| `include_instrumentals` | off | Include instrumental versions (only if original also exists) |
+| `include_duplicate_versions` | off | Disable deduplication; keep all versions of each track |
+| `use_artist_image_as_cover` | off | Upload artist's Spotify image as playlist cover |
+
+When deduplication is on (default), duplicate tracks are resolved by normalized title comparison — bracket content and filter keywords stripped — keeping the version from the album with the highest release priority (LP > EP > Single).
+
+---
+
+## Project Structure
 
 ```
 discograpy/
-├── app.py                 # Flask backend + API + routes
-├── playlists.py           # Existing Spotify discography logic (CLI + core methods)
+├── app.py                    # Flask entry point
+├── playlists.py              # CLI entry point
+├── get_token.py              # Local helper: obtain refresh token
+├── src/
+│   ├── config.py             # Spotify client factory, env var validation
+│   ├── logging_config.py     # Logging setup (file + console, UTF-8)
+│   ├── domain/
+│   │   ├── album_types.py    # Album type config, matching, suffix logic
+│   │   ├── filters.py        # Content filters and track deduplication
+│   │   └── models.py         # RunSummary dataclass
+│   ├── services/
+│   │   ├── discography.py    # DiscographyService: orchestrates the full flow
+│   │   ├── spotify_client.py # SpotifyClient: Spotipy wrapper + retry
+│   │   ├── musicbrainz.py    # MusicBrainz metadata enrichment (genres, country)
+│   │   └── retry.py          # retry_on_failure decorator with backoff
+│   ├── web/
+│   │   ├── __init__.py       # Flask app factory, singleton client/service
+│   │   └── routes.py         # HTTP routes and API endpoints
+│   └── cli/
+│       ├── runner.py         # CLI orchestration logic
+│       └── ui.py             # Spinner, menus, artist/summary display
 ├── templates/
-│   └── index.html         # Single-page frontend
-├── requirements.txt       # Python dependencies
-├── Procfile               # Railway/Heroku process type
-├── railway.toml           # Railway deployment config
-├── README.md              # Documentation
-└── spotify_discography.log  # Runtime log file (generated)
+│   └── index.html            # Single-page frontend
+├── requirements.txt
+├── Procfile                  # Railway/Heroku process definition
+├── railway.toml              # Railway deployment config
+└── README.md
 ```
 
 ---
 
-## 🧠 Logging
+## Logging
 
-The script uses Python's `logging` module for professional logging with both console and file output.
+Log format:
 
-### UTF-8 Encoding Support
-
-The logging system now includes **UTF-8 encoding support** with error handling for Windows compatibility:
-- Console output uses UTF-8 encoding with 'replace' error handling
-- Properly displays international characters and special symbols (✓, ✗, ⚠, etc.)
-- File logging also uses UTF-8 encoding for comprehensive log files
-- Compatible with artists using non-Latin characters (e.g., Japanese, Korean, Cyrillic)
-
-### Log Locations
-
-- **Console:** Real-time `INFO` level messages
-- **File:** `spotify_discography.log` (includes all levels)
-
-### Log Format
-
-```
+```text
 %(asctime)s - %(name)s - %(levelname)s - %(message)s
 ```
 
-Example log output:
+| Output | Level |
+|---|---|
+| Console | `INFO` (or `DEBUG` with `--verbose`) |
+| `spotify_discography.log` | `DEBUG` always |
 
-```
-2025-09-21 12:00:00 - __main__ - INFO - Spotify client initialized successfully
-2025-09-21 12:00:01 - __main__ - INFO - Found 3 artists
-2025-09-21 12:00:05 - __main__ - WARNING - Rate limited. Waiting 7 seconds
-2025-09-21 12:00:20 - __main__ - INFO - Successfully created playlist with 145 tracks
-```
-
-### Log Levels
-
-- **INFO:** Normal operation messages
-- **WARNING:** Rate limits, retries, non-critical issues
-- **ERROR:** Failed operations, exceptions
+Console stream is reconfigured to UTF-8 with `errors='replace'` for Windows compatibility.
 
 ---
 
-## 📊 Technical Improvements
+## Deployment
 
-This script includes several optimizations compared to a basic implementation:
+Deployed on [Railway](https://railway.app/) using Nixpacks.
 
-| Feature | Implementation | Benefit |
-|---------|---------------|---------|
-| **Scalability** | Handles large discographies with thousands of tracks | Works with any artist size |
-| **Parallel Processing** | Uses `ThreadPoolExecutor` (5 workers) for concurrent album fetching | 3-5x faster |
-| **Resilience** | Retry logic with exponential backoff for API errors | Handles transient failures |
-| **Memory Efficiency** | Generator-based pagination | Low memory footprint |
-| **Professional Logging** | Structured logging via `logging` module with UTF-8 encoding support | Easy debugging with international characters |
-| **User Experience** | Interactive artist selection with validation and retry options | Clear and intuitive |
-| **Error Handling** | Comprehensive try-except blocks with specific error messages | Graceful failures |
-| **Smart Type Detection** | Warns when selected album types are missing and adjusts playlist names | Accurate playlist naming and user awareness |
+Start command: `gunicorn app:app --bind 0.0.0.0:$PORT`
+
+Health check path: `/`
+
+Restart policy: `on_failure`
+
+Required environment variables on Railway: `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_SECRET`, `SPOTIPY_REDIRECT_URI`, `SPOTIPY_REFRESH_TOKEN`, `FLASK_SECRET_KEY`.
 
 ---
 
-## 💡 Performance Optimization
+## Notes & Limitations
 
-The script is highly optimized for speed and efficiency:
-
-### Optimization Strategies
-
-- **🔄 Parallel Processing**  
-  Uses `ThreadPoolExecutor` with 5 concurrent workers to fetch album tracks simultaneously
-  
-- **📦 Batch Processing**  
-  Adds tracks to playlists in batches of 100 (Spotify's API limit)
-  
-- **🧠 Memory Efficiency**  
-  Generators for pagination prevent loading all data into memory at once
-  
-- **⏱️ Efficient Ordering**  
-  Maintains chronological album order while processing in parallel
-  
-- **🔁 Smart Retry Logic**  
-  Exponential backoff prevents hammering the API during failures
-  
-- **📊 Rate Limit Handling**  
-  Respects Spotify's `Retry-After` header for HTTP 429 responses
-
-### Performance Benchmarks
-
-| Discography Size | Processing Time |
-|-----------------|----------------|
-| < 100 tracks    | 30-60 seconds  |
-| 100-500 tracks  | 1-2 minutes    |
-| 500-1000 tracks | 2-3 minutes    |
-| 1000+ tracks    | 2-5 minutes    |
-
-*Times may vary based on network speed and Spotify API response times.*
+- **Batch size:** Spotify API limit of 100 tracks per add-to-playlist request. Handled automatically with parallel batching (up to 4 concurrent batch uploads).
+- **Regional duplicates:** Spotify returns market-specific versions of albums separately. Deduplication reduces this, but enabling `include_duplicate_versions` will include all of them.
+- **Playlists are public by default.** To create private playlists, change `public=True` to `public=False` in `src/services/spotify_client.py` inside `create_playlist`.
+- **Cover upload** requires `ugc-image-upload` scope in the refresh token. If the token was obtained without it, re-run `get_token.py`.
+- **MusicBrainz** requests have a 1.8s timeout and are LRU-cached per process. Enrichment failures are non-fatal; missing metadata falls back to Spotify's own genre data.
 
 ---
 
-## 🔒 Permissions Required
-
-The script requires the following Spotify OAuth scope:
-
-- **`playlist-modify-public`** - Create and modify public playlists
-
-### How It Works
-
-- Spotipy handles OAuth 2.0 authentication automatically
-- Your authentication token is cached in `.cache` file
-- Token refresh happens automatically when expired
-- No need to re-authenticate for future runs
-
-### Privacy Note
-
-If you prefer **private playlists**, you can modify the script:
-
-```python
-# In playlists.py, line 664, change:
-public=True  # to:
-public=False
-```
-
-The script also adds a description to each playlist linking back to the project repository.
-
----
-
-## ✅ Example Output
-
-### Console Output
-
-```
-Enter artist name: System of a Down
-
-Found 1 artist:
-1. System of a Down
-
-Select artist number (1-1): 1
-
-=== Album Type Selection ===
-0: Everything (all album types combined)
-1: Albums only
-2: EPs only
-3: Singles only
-4: Compilations only
-5: EPs + Singles
-6: Albums + EPs + Singles
-
-Select album type (0-6): 1
-
-Retrieving albums...
-Created playlist: System of a Down discography [ALBUMS]
-
-Retrieving tracks from albums...
-Adding 73 tracks to playlist...
-
-✓ 'System of a Down discography [ALBUMS]' playlist created successfully with 73 tracks!
-```
-
-### Example with Missing Types Warning
-
-When selecting a combination that includes types not available for an artist:
-
-```
-Select album type (0-6): 5
-
-Retrieving albums...
-
-⚠ Warning: EPs not found on Spotify for this artist.
-Using available types instead.
-
-Created playlist: The Beatles discography [SINGLES]
-
-Retrieving tracks from albums...
-Adding 12 tracks to playlist...
-
-✓ 'The Beatles discography [SINGLES]' playlist created successfully with 12 tracks!
-```
-
-### What Happens Behind the Scenes
-
-1. ✅ Spotify client initialized
-2. ✅ Artist search performed
-3. ✅ User selects correct artist
-4. ✅ User selects album type (albums, EPs, singles, compilations, or combinations)
-5. ✅ All albums retrieved and filtered by type
-6. ✅ Missing album types detected and user warned if necessary
-7. ✅ Playlist name adjusted based on actual content found
-8. ✅ Albums sorted by release date
-9. ✅ Playlist created in your account with descriptive name
-10. ✅ Album tracks fetched in parallel (5 concurrent workers)
-11. ✅ Tracks added to playlist in batches of 100
-12. ✅ Success message displayed
-
-The playlist appears **instantly** in your Spotify account and can be accessed from any device.
-
----
-
-## ⚠️ Notes & Limitations
-
-### API Limitations
-
-- **Batch Size:** Spotify API limits to 100 tracks per request (handled automatically)
-- **Rate Limiting:** The script respects rate limits with automatic retry and backoff
-- **Album Types:** You can choose specific album types (albums, EPs, singles, compilations) or combine them
-
-### Duplicate Handling
-
-- Regional versions and deluxe editions may create duplicate albums
-- All versions returned by Spotify are included in the playlist
-- Consider this when creating playlists for artists with many special editions
-
-### Playlist Permissions
-
-- Script creates **public playlists** by default
-- Your Spotify account must have permission to create playlists
-- To create private playlists, modify line 338 in `playlists.py`
-
-### Important Considerations
-
-- 🔴 **Authentication Required:** First run requires browser-based OAuth flow
-- 🟡 **Network Dependent:** Requires stable internet connection
-- 🟢 **Safe to Interrupt:** Can safely cancel with `Ctrl+C` (playlist may be partial)
-
----
-
-## 🐛 Troubleshooting
-
-### Common Issues and Solutions
+## Troubleshooting
 
 <details>
-<summary><b>🔴 Authentication Error</b></summary>
+<summary>Authentication error / invalid credentials</summary>
 
-**Symptoms:**
-- Unable to connect to Spotify
-- Invalid credentials error
-
-**Solutions:**
-1. Verify your `.env` file contains valid credentials
-2. Ensure redirect URI matches **exactly** what you set in Spotify Developer Dashboard
-3. Delete `.cache` file and re-authenticate
-4. Check for typos in your Client ID and Client Secret
-5. Ensure your Spotify Developer app is active
+1. Check `.env` has correct `SPOTIPY_CLIENT_ID` and `SPOTIPY_CLIENT_SECRET`.
+2. Confirm redirect URI in `.env` matches exactly what's set in the Spotify Developer Dashboard.
+3. Re-run `get_token.py` to get a fresh `SPOTIPY_REFRESH_TOKEN`.
 
 </details>
 
 <details>
-<summary><b>🟡 Rate Limiting (HTTP 429)</b></summary>
+<summary>Rate limiting (HTTP 429)</summary>
 
-**Symptoms:**
-- Script pauses frequently
-- "Rate limited" warnings in logs
-
-**Solutions:**
-1. The script handles this automatically with exponential backoff
-2. For persistent issues, reduce `MAX_CONCURRENT_WORKERS` in line 125 of `playlists.py` (change from 5 to 3)
-3. Add artificial delays between operations
-4. Wait a few minutes before retrying
+The retry decorator reads the `Retry-After` header and waits accordingly with added jitter. Persistent rate limiting suggests the Spotify app is being throttled. Wait a few minutes and retry.
 
 </details>
 
 <details>
-<summary><b>🟢 No Content Found</b></summary>
+<summary>No content found for selected type</summary>
 
-**Symptoms:**
-- "No [albums/EPs/singles/etc.] found for this artist"
-
-**Solutions:**
-1. Verify the artist has the selected album type on Spotify
-2. Try selecting "Everything" to see all available content
-3. Some artists may not have all content types (e.g., no EPs or compilations)
-4. Try searching with exact artist name as shown on Spotify
-5. Check if the artist has region-specific content restrictions
-6. The script will automatically warn you when types are missing and adjust the playlist name
-7. Choose option 1 to retry with a different album type, or option 0 to search for a different artist
+1. Verify the artist actually has that release type on Spotify.
+2. Try option `0` (Everything) to see all available content.
+3. The app warns and adjusts the playlist name when a requested type is absent.
 
 </details>
 
 <details>
-<summary><b>🔵 Tracks Not Added</b></summary>
+<summary>Cover upload rejected (401)</summary>
 
-**Symptoms:**
-- Playlist created but empty or incomplete
-
-**Solutions:**
-1. Check your Spotify account has permission to create playlists
-2. Verify you're not hitting Spotify's rate limits
-3. Review `spotify_discography.log` for detailed error messages
-4. Check your internet connection stability
-5. Try running the script again (idempotent operations)
+The `SPOTIPY_REFRESH_TOKEN` was generated without the `ugc-image-upload` scope. Re-run `get_token.py` and update the token in your environment.
 
 </details>
 
 <details>
-<summary><b>🟣 Import Errors</b></summary>
+<summary>Import errors (ModuleNotFoundError)</summary>
 
-**Symptoms:**
-- `ModuleNotFoundError: No module named 'spotipy'`
-- `ModuleNotFoundError: No module named 'dotenv'`
-
-**Solutions:**
-1. Install dependencies: `pip install -r requirements.txt`
-2. Ensure you're using Python 3.8 or higher: `python --version`
-3. Check if you're in the correct virtual environment
-4. Try: `python3 -m pip install spotipy python-dotenv`
-
-</details>
-
-### Still Having Issues?
-
-1. **Check the log file:** `spotify_discography.log` contains detailed error information
-2. **Enable debug logging:** Modify line 14 in `playlists.py`: `level=logging.DEBUG`
-3. **Test API credentials:** Use Spotify's [Web API Console](https://developer.spotify.com/console/)
-4. **Verify network:** Ensure you can access `api.spotify.com`
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Here's how you can help:
-
-### Reporting Issues
-
-1. Check existing issues first
-2. Provide detailed description
-3. Include error messages and logs
-4. Specify Python version and OS
-
-### Submitting Changes
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Guidelines
-
-- Follow PEP 8 style guidelines
-- Add type hints to new functions
-- Update documentation for any changes
-- Test with multiple artists and scenarios
-- Add logging for new features
-
----
-
-## 📄 License
-
-This project is licensed under the **MIT License**.
-
-```
-MIT License
-
-Copyright (c) 2025 Spotify Discography Playlist Creator
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+```bash
+pip install -r requirements.txt
+python --version  # must be 3.8+
 ```
 
+</details>
+
 ---
 
-## 👨‍💻 Author
+## License
 
-**Developed with ❤️ for automation and music lovers.**
+MIT License. See [LICENSE](LICENSE).
 
-### Connect
+---
+
+## Author
+
+Developed for automation and music lovers.
 
 - GitHub: [@based-on-what](https://github.com/based-on-what)
+- Project: [github.com/based-on-what/discograpy](https://github.com/based-on-what/discograpy)
 
-### Acknowledgments
-
-- [Spotipy](https://spotipy.readthedocs.io/) - Excellent Python wrapper for Spotify Web API
-- [Spotify Web API](https://developer.spotify.com/documentation/web-api/) - Comprehensive music data platform
-- All contributors and users of this project
-
----
-
-## 📌 Quick Start Checklist
-
-Before running the script, ensure you have:
-
-- [x] Python 3.8+ installed (`python --version`)
-- [x] Dependencies installed (`pip install -r requirements.txt`)
-- [x] Spotify Developer app created at [developer.spotify.com](https://developer.spotify.com/dashboard)
-- [x] `.env` file configured with `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_SECRET`, and `SPOTIPY_REDIRECT_URI`
-- [x] Redirect URI set for your environment:
-  - Local: `http://127.0.0.1:5000/callback`
-  - Production: `https://discograpy-production.up.railway.app/callback`
-- [x] Ready for first-time authentication flow
-
----
-
-## 💡 Pro Tips
-
-### For Power Users
-
-- **Large Discographies:** For artists with 1000+ tracks, the script typically completes in 2-5 minutes
-- **Caching:** Consider implementing local caching for frequently accessed artists
-- **Batch Operations:** Process multiple artists by creating a wrapper script
-- **Custom Workers:** Adjust `MAX_CONCURRENT_WORKERS` constant (line 125) based on your network speed
-- **Timeouts:** Adjust `ALBUM_FETCH_TIMEOUT` constant (line 126) for slower connections
-
-### Advanced Configuration
-
-The script uses class constants for easy configuration. You can modify these values in `playlists.py`:
-
-```python
-# Performance constants (lines 125-127)
-MAX_CONCURRENT_WORKERS = 5  # Number of parallel album fetches (increase for faster processing)
-ALBUM_FETCH_TIMEOUT = 30    # Timeout in seconds for fetching album tracks
-SPOTIFY_BATCH_SIZE = 100    # Spotify API limit for adding tracks (do not exceed 100)
-
-# For more advanced customization:
-# Increase parallelism for faster processing (if network allows)
-with ThreadPoolExecutor(max_workers=10) as executor:  # Line 626
-
-# Adjust retry attempts for unstable connections
-@retry_on_failure(max_retries=5, delay=2.0)  # Lines 392, 540, 576, 639, 678
-```
-
----
-
-**Happy listening! 🎧**
-
-*Star ⭐ this repository if you find it useful!*
+Acknowledgments: [Spotipy](https://spotipy.readthedocs.io/), [Spotify Web API](https://developer.spotify.com/documentation/web-api/), [MusicBrainz](https://musicbrainz.org/).
