@@ -14,7 +14,7 @@ Construido sobre la [Spotify Web API](https://developer.spotify.com/documentatio
 
 ## App en producción
 
-**[discograpy-production.up.railway.app](https://discograpy-production.up.railway.app/)**
+**[discograpy.up.railway.app](https://discograpy.up.railway.app/)**
 
 ---
 
@@ -91,7 +91,7 @@ http://127.0.0.1:5000/callback
 Para producción (Railway):
 
 ```text
-https://discograpy-production.up.railway.app/callback
+https://discograpy.up.railway.app/callback
 ```
 
 Clic en **Add** y luego **Save** para cada una.

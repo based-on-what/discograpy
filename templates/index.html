@@ -355,8 +355,8 @@
         color: var(--c-muted);
         flex-shrink: 0;
       }
-      .artist-name { font-weight: 700; font-size: 13px; line-height: 1.3; }
-      .artist-meta { font-size: 11px; color: var(--c-muted); margin-top: 2px; }
+      .artist-name { font-weight: 700; font-size: 13px; line-height: 1.3; display: block; }
+      .artist-meta { font-size: 11px; color: var(--c-muted); margin-top: 3px; display: block; }
 
       /* ─── Empty state ────────────────────────────────────── */
       .empty-state {
@@ -1000,7 +1000,8 @@
           const genres = (artist.genres || []).slice(0, 2).join(', ') || 'no genres listed';
           const followers =
             artist.followers > 0 ? artist.followers.toLocaleString() + ' followers' : '';
-          const meta = [followers, genres].filter(Boolean).join(' · ');
+          const location = artist.location && artist.location !== 'Unknown' ? artist.location : '';
+          const meta = [followers, location, genres].filter(Boolean).join(' · ');
 
           const info = document.createElement('div');
           info.innerHTML =
