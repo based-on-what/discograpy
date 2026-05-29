@@ -98,6 +98,29 @@ class DiscographyService:
                     (album.get("release_date", ""), album, album.get("name", "Unknown"), tracks)
                 )
 
+        def _resolve_date(
+            entry: Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]],
+        ) -> Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]]:
+            spotify_date, album, album_name, tracks = entry
+            artists = album.get("artists") or []
+            artist_name = str(artists[0].get("name", "")).strip() if artists else ""
+            mb_date = (
+                musicbrainz.lookup_release_date(artist_name, album_name)
+                if artist_name
+                else None
+            )
+            if mb_date and mb_date != spotify_date:
+                self.logger.debug(
+                    "MB date override: %r  Spotify=%s → MB=%s",
+                    album_name,
+                    spotify_date,
+                    mb_date,
+                )
+            return (mb_date or spotify_date, album, album_name, tracks)
+
+        with ThreadPoolExecutor(max_workers=3) as mb_pool:
+            ordered = list(mb_pool.map(_resolve_date, ordered))
+
         ordered.sort(key=lambda x: x[0])
 
         norm_cache: Dict[str, str] = {}

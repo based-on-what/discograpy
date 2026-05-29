@@ -6,6 +6,40 @@ import requests
 
 
 @lru_cache(maxsize=2048)
+def lookup_release_date(artist_name: str, album_title: str) -> Optional[str]:
+    """Return earliest known release date from MusicBrainz, or None on miss/error."""
+    if not artist_name or not album_title:
+        return None
+
+    endpoint = "https://musicbrainz.org/ws/2/release/"
+    headers = {"User-Agent": "DiscograPY/1.0 (https://github.com/based-on-what/discograpy)"}
+    params = {
+        "query": f'release:"{album_title}" AND artist:"{artist_name}"',
+        "fmt": "json",
+        "limit": 5,
+    }
+
+    try:
+        response = requests.get(endpoint, params=params, headers=headers, timeout=2.5)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+    releases = payload.get("releases", []) if isinstance(payload, dict) else []
+    if not releases:
+        return None
+
+    norm_title = album_title.strip().casefold()
+    exact = [r for r in releases if str(r.get("title", "")).strip().casefold() == norm_title]
+    candidates = exact or releases
+
+    best = max(candidates, key=lambda r: _safe_int(r.get("score", 0)))
+    date = best.get("date")
+    return str(date) if date else None
+
+
+@lru_cache(maxsize=2048)
 def lookup_artist_metadata(artist_name: str) -> Dict[str, Any]:
     if not artist_name:
         return {"genres": [], "country": None}
