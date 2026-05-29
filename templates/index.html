@@ -751,6 +751,10 @@
               <input type="checkbox" id="includeDuplicateVersions" />
               <label for="includeDuplicateVersions">Duplicate versions</label>
             </div>
+            <div class="filter-item">
+              <input type="checkbox" id="useArtistImageAsCover" />
+              <label for="useArtistImageAsCover">Use artist image as cover</label>
+            </div>
           </div>
         </div>
 
@@ -1172,6 +1176,7 @@
           include_remixes:          $('includeRemixes').checked,
           include_instrumentals:    $('includeInstrumentals').checked,
           include_duplicate_versions: $('includeDuplicateVersions').checked,
+          use_artist_image_as_cover:  $('useArtistImageAsCover').checked,
           dry_run: false,
           verbose: false,
         };
@@ -1231,7 +1236,7 @@
         setSearchLoading(false);
 
         ['includeLive', 'includeDemos', 'includeRemixes',
-         'includeInstrumentals', 'includeDuplicateVersions']
+         'includeInstrumentals', 'includeDuplicateVersions', 'useArtistImageAsCover']
           .forEach((id) => { $(id).checked = false; });
 
         showCreateAlert('');
