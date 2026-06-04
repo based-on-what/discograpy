@@ -28,7 +28,7 @@ class SpotifyClient:
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         if not artist_name.strip():
             raise ValueError("Artist name cannot be empty")
-        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=12)
+        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=50)
         return results.get("artists", {}).get("items", [])
 
     @retry_on_failure(max_retries=5)
