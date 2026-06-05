@@ -28,7 +28,7 @@ class SpotifyClient:
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         if not artist_name.strip():
             raise ValueError("Artist name cannot be empty")
-        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=100)
+        results = self.sp.search(q=f"artist:{artist_name}", type="artist", limit=50)
         return results.get("artists", {}).get("items", [])
 
     @retry_on_failure(max_retries=5)
@@ -38,7 +38,7 @@ class SpotifyClient:
     @retry_on_failure(max_retries=5)
     def get_artist_albums(self, artist_id: str, album_types: List[str]) -> List[Dict[str, Any]]:
         include_groups = ",".join(album_types)
-        results = self.sp.artist_albums(artist_id=artist_id, include_groups=include_groups, limit=100)
+        results = self.sp.artist_albums(artist_id=artist_id, include_groups=include_groups, limit=50)
         albums = self._paginate(results, "items")
         valid = [a for a in albums if a.get("release_date")]
         valid.sort(key=lambda a: a["release_date"])
@@ -46,7 +46,7 @@ class SpotifyClient:
 
     @retry_on_failure(max_retries=5)
     def get_album_tracks(self, album_id: str) -> List[Dict[str, Any]]:
-        results = self.sp.album_tracks(album_id=album_id, limit=100)
+        results = self.sp.album_tracks(album_id=album_id, limit=50)
         return self._paginate(results, "items")
 
     @retry_on_failure(max_retries=5)
