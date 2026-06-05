@@ -59,15 +59,23 @@ def _ensure_spotify_token(client: SpotifyClient) -> Optional[Dict[str, Any]]:
     try:
         token_info = auth_manager.get_cached_token()
         if token_info and not auth_manager.is_token_expired(token_info):
-            return None
+            return None  # Token vigente, continuar
+
         if refresh_token:
             refreshed = auth_manager.refresh_access_token(refresh_token)
             if refreshed:
-                return None
-        if token_info:
-            return None
+                return None  # Refresh exitoso, continuar
+            # refresh_access_token retornó None → el SPOTIPY_REFRESH_TOKEN es inválido
+            current_app.logger.warning(
+                "SPOTIPY_REFRESH_TOKEN is invalid or expired. "
+                "Re-run get_token.py locally and update the Railway variable."
+            )
+            return _auth_error_payload()
+
+        # Sin refresh_token configurado y sin token vigente: sin autenticación
     except Exception as exc:
         current_app.logger.warning("Failed to obtain Spotify token: %s", exc)
+
     return _auth_error_payload()
 
 
