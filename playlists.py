@@ -29,10 +29,10 @@ def main() -> None:
     args = parse_args()
     configure_logging(verbose=args.verbose)
 
+    from src.cli.runner import run
     from src.config import build_spotify_client
     from src.services.discography import DiscographyService
     from src.services.spotify_client import SpotifyClient
-    from src.cli.runner import run
 
     sp = build_spotify_client()
     logger = logging.getLogger("discography")

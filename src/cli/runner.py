@@ -3,11 +3,11 @@ from typing import Optional, Set
 
 from spotipy.exceptions import SpotifyException
 
+from src.cli import ui
 from src.domain import album_types as at
 from src.domain.models import RunSummary
-from src.services.discography import DiscographyService, PLAYLIST_DESCRIPTION
+from src.services.discography import PLAYLIST_DESCRIPTION, DiscographyService
 from src.services.spotify_client import SpotifyClient
-from src.cli import ui
 
 
 def run(svc: DiscographyService, verbose: bool = False) -> None:

@@ -87,6 +87,7 @@ def index():
 @bp.route("/callback")
 def callback():
     from flask import current_app
+
     from src.web import get_client
 
     code = request.args.get("code")
@@ -114,6 +115,7 @@ def album_types():
 @bp.post("/api/search")
 def search_artist():
     from flask import current_app
+
     from src.web import get_client, get_service
 
     data = request.get_json(silent=True) or {}
@@ -146,7 +148,6 @@ def search_artist():
 
 @bp.post("/api/create")
 def create_playlist():
-    from flask import current_app
     from src.web import get_client, get_service
 
     data = request.get_json(silent=True) or {}

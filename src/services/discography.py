@@ -28,11 +28,26 @@ class DiscographyService:
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         return self.client.search_artists(artist_name)
 
-    def enrich_artists(self, artists: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        valid = [a for a in artists if a.get("id")]
+    # The frontend renders search results in a scrollable list that shows ~5
+    # artists without scrolling; MusicBrainz allows 1 req/s, so only the top
+    # results are worth the lookup cost.
+    MB_ENRICH_LIMIT = 5
 
-        def _enrich(artist: Dict[str, Any]) -> Dict[str, Any]:
-            mb_data = musicbrainz.lookup_artist_metadata((artist.get("name") or "").strip())
+    def enrich_artists(
+        self, artists: List[Dict[str, Any]], mb_limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        valid = [a for a in artists if a.get("id")]
+        limit = self.MB_ENRICH_LIMIT if mb_limit is None else mb_limit
+
+        def _enrich(artist: Dict[str, Any], with_musicbrainz: bool) -> Dict[str, Any]:
+            mb_data: Dict[str, Any] = {"genres": [], "country": None}
+            if with_musicbrainz:
+                try:
+                    mb_data = musicbrainz.lookup_artist_metadata(
+                        (artist.get("name") or "").strip()
+                    )
+                except Exception as exc:
+                    self.logger.warning("Enrichment failed for %s: %s", artist.get("id"), exc)
             mb_genres = [g for g in (mb_data.get("genres") or []) if g][:3]
             spotify_genres = [g for g in (artist.get("genres") or []) if g][:3]
             return {
@@ -44,17 +59,9 @@ class DiscographyService:
                 "location": mb_data.get("country") or "Unknown",
             }
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(_enrich, a): a["id"] for a in valid}
-            enriched: Dict[str, Any] = {}
-            for f in as_completed(futures):
-                artist_id = futures[f]
-                try:
-                    enriched[artist_id] = f.result()
-                except Exception as exc:
-                    self.logger.warning("Enrichment failed for %s: %s", artist_id, exc)
-
-        return [enriched[a["id"]] for a in valid if a["id"] in enriched]
+        # Sequential on purpose: lookup_artist_metadata throttles to 1 req/s
+        # (MusicBrainz limit), so parallel workers would only queue on the lock.
+        return [_enrich(a, with_musicbrainz=i < limit) for i, a in enumerate(valid)]
 
     def get_filtered_albums(
         self, artist_id: str, selection: int

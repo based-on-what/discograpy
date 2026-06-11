@@ -1,5 +1,4 @@
 import logging
-import sys
 
 
 def configure_logging(verbose: bool = False) -> logging.Logger:

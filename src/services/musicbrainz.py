@@ -1,8 +1,26 @@
+import threading
+import time
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import pycountry
 import requests
+
+_session = requests.Session()
+
+# MusicBrainz allows 1 request/second per IP; exceeding it returns 503.
+_MIN_REQUEST_INTERVAL = 1.0
+_throttle_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def _throttle() -> None:
+    global _last_request_at
+    with _throttle_lock:
+        wait = _MIN_REQUEST_INTERVAL - (time.monotonic() - _last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_at = time.monotonic()
 
 
 @lru_cache(maxsize=2048)
@@ -15,7 +33,8 @@ def lookup_artist_metadata(artist_name: str) -> Dict[str, Any]:
     params = {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5}
 
     try:
-        response = requests.get(endpoint, params=params, headers=headers, timeout=1.8)
+        _throttle()
+        response = _session.get(endpoint, params=params, headers=headers, timeout=1.8)
         response.raise_for_status()
         payload = response.json()
     except (requests.RequestException, ValueError):

@@ -9,6 +9,8 @@ from spotipy.exceptions import SpotifyException
 
 from src.services.retry import retry_on_failure
 
+_session = requests.Session()
+
 
 class SpotifyClient:
     def __init__(self, sp: spotipy.Spotify, logger: logging.Logger) -> None:
@@ -92,7 +94,7 @@ class SpotifyClient:
                 image_url = image.get("url")
                 if not image_url:
                     continue
-                response = requests.get(image_url, timeout=5)
+                response = _session.get(image_url, timeout=5)
                 response.raise_for_status()
                 if len(response.content) > 256_000:
                     continue
@@ -137,6 +139,9 @@ class SpotifyClient:
             self._upload_cover(playlist_id, image_b64)
 
     @retry_on_failure(max_retries=5)
+    def _next_page(self, results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self.sp.next(results)
+
     def _paginate(self, initial_results: Dict[str, Any], items_key: str = "items") -> List[Dict[str, Any]]:
         if not initial_results:
             return []
@@ -150,7 +155,7 @@ class SpotifyClient:
             return []
         all_items = list(results.get(items_key, []))
         while results.get("next"):
-            next_page = self.sp.next(results)
+            next_page = self._next_page(results)
             if not next_page:
                 break
             all_items.extend(next_page.get(items_key, []))
