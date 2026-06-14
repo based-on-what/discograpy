@@ -10,7 +10,7 @@ from src.services.spotify_client import SpotifyClient
 
 PLAYLIST_DESCRIPTION = (
     "Made with DiscograPY, an open-source Spotify discography creator. "
-    "Find the website at https://discograpy.up.railway.app"
+    "Find the website at https://discograpy.up.railway.app "
 )
 
 
