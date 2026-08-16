@@ -7,7 +7,8 @@ from spotipy.exceptions import SpotifyException
 
 from src.domain import album_types as at
 from src.services.spotify_client import SpotifyClient
-from src.web.limiter import CREATE_LIMITS, SEARCH_LIMIT, limiter
+from src.web import jobs
+from src.web.limiter import CREATE_LIMITS, POLL_LIMIT, SEARCH_LIMIT, limiter
 
 bp = Blueprint("main", __name__)
 
@@ -126,10 +127,12 @@ def search_artist():
     if not artist_name:
         return _json_error("artist_name is required", 400)
 
-    client = get_client()
-    svc = get_service()
-
     try:
+        # Built inside the try so a missing-env EnvironmentError keeps its
+        # message instead of hitting the catch-all 500 handler.
+        client = get_client()
+        svc = get_service()
+
         auth_err = _ensure_spotify_token(client)
         if auth_err:
             return jsonify(auth_err), 401
@@ -151,6 +154,8 @@ def search_artist():
 @bp.post("/api/create")
 @limiter.limit(CREATE_LIMITS)
 def create_playlist():
+    from flask import current_app
+
     from src.web import get_client, get_service
 
     data = request.get_json(silent=True) or {}
@@ -172,60 +177,79 @@ def create_playlist():
     if not isinstance(album_type_selection, int) or album_type_selection not in at.ALBUM_TYPE_CONFIGS:
         return _json_error("album_type_selection must be an integer between 0 and 6", 400)
 
-    client = get_client()
-    svc = get_service()
+    app = current_app._get_current_object()
 
-    try:
-        auth_err = _ensure_spotify_token(client)
-        if auth_err:
-            return jsonify(auth_err), 401
+    def _work() -> Dict[str, Any]:
+        # Runs on a jobs.py worker thread, which has no request or app context.
+        with app.app_context():
+            try:
+                # Built inside the try so a missing-env EnvironmentError becomes a
+                # JobError with its real message instead of a bare 500.
+                client = get_client()
+                svc = get_service()
 
-        if use_artist_image_as_cover and not client.has_scope("ugc-image-upload"):
-            return _json_error(
-                "Current Spotify token does not include 'ugc-image-upload'. "
-                "Re-authenticate and regenerate SPOTIPY_REFRESH_TOKEN to enable artist cover uploads.",
-                400,
-            )
+                auth_err = _ensure_spotify_token(client)
+                if auth_err:
+                    raise jobs.JobError(auth_err["error"], 401, auth_required=True)
 
-        summary = svc.build_playlist(
-            artist_id=artist_id,
-            artist_name=artist_name,
-            album_type_selection=album_type_selection,
-            verbose=verbose,
-            include_live_versions=include_live_versions,
-            include_demos=include_demos,
-            include_remixes=include_remixes,
-            include_instrumentals=include_instrumentals,
-            include_duplicate_versions=include_duplicate_versions,
-            use_artist_image_as_cover=use_artist_image_as_cover,
-        )
+                if use_artist_image_as_cover and not client.has_scope("ugc-image-upload"):
+                    raise jobs.JobError(
+                        "Current Spotify token does not include 'ugc-image-upload'. "
+                        "Re-authenticate and regenerate SPOTIPY_REFRESH_TOKEN "
+                        "to enable artist cover uploads.",
+                        400,
+                    )
+
+                summary = svc.build_playlist(
+                    artist_id=artist_id,
+                    artist_name=artist_name,
+                    album_type_selection=album_type_selection,
+                    verbose=verbose,
+                    include_live_versions=include_live_versions,
+                    include_demos=include_demos,
+                    include_remixes=include_remixes,
+                    include_instrumentals=include_instrumentals,
+                    include_duplicate_versions=include_duplicate_versions,
+                    use_artist_image_as_cover=use_artist_image_as_cover,
+                )
+            except ValueError as exc:
+                raise jobs.JobError(str(exc), 400) from exc
+            except EnvironmentError as exc:
+                raise jobs.JobError(str(exc), 500) from exc
+            except SpotifyException as exc:
+                raise jobs.JobError(
+                    SpotifyClient.error_message(exc), exc.http_status or 502
+                ) from exc
+            except _requests.exceptions.Timeout as exc:
+                raise jobs.JobError(
+                    "Spotify API timed out — rate limited. Wait a minute and try again.", 429
+                ) from exc
 
         playlist_url = (
             f"https://open.spotify.com/playlist/{summary.playlist_id}"
             if summary.playlist_id
             else None
         )
-        return jsonify(
-            {
-                "artist": summary.artist,
-                "playlist_name": summary.playlist_name,
-                "playlist_id": summary.playlist_id,
-                "playlist_url": playlist_url,
-                "albums_included": summary.albums_included,
-                "tracks_added": summary.tracks_added,
-                "total_length": _format_duration(summary.total_ms),
-                "cover_applied": summary.cover_applied,
-                "cover_error": summary.cover_error,
-                "dry_run": summary.dry_run,
-            }
-        )
-    except ValueError as exc:
-        return _json_error(str(exc), 400)
-    except EnvironmentError as exc:
-        return _json_error(str(exc), 500)
-    except SpotifyException as exc:
-        return _json_error(SpotifyClient.error_message(exc), exc.http_status or 502)
-    except _requests.exceptions.Timeout:
-        return _json_error(
-            "Spotify API timed out — rate limited. Wait a minute and try again.", 429
-        )
+        return {
+            "artist": summary.artist,
+            "playlist_name": summary.playlist_name,
+            "playlist_id": summary.playlist_id,
+            "playlist_url": playlist_url,
+            "albums_included": summary.albums_included,
+            "tracks_added": summary.tracks_added,
+            "total_length": _format_duration(summary.total_ms),
+            "cover_applied": summary.cover_applied,
+            "cover_error": summary.cover_error,
+            "dry_run": summary.dry_run,
+        }
+
+    return jsonify({"job_id": jobs.submit(_work)}), 202
+
+
+@bp.get("/api/jobs/<job_id>")
+@limiter.limit(POLL_LIMIT)
+def job_status(job_id: str):
+    payload = jobs.get(job_id)
+    if payload is None:
+        return _json_error("Unknown or expired job", 404)
+    return jsonify(payload)

@@ -929,6 +929,46 @@
         return data;
       }
 
+      /* Playlist creation runs as a background job on the server, so POST
+         /api/create returns a job id and the result arrives by polling. */
+      const JOB_POLL_INTERVAL_MS = 2000;
+      const JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
+      function jobError(message, status, data) {
+        const err = new Error(message);
+        err.status = status;
+        err.data = data || {};
+        return err;
+      }
+
+      async function waitForJob(jobId) {
+        const deadline = Date.now() + JOB_TIMEOUT_MS;
+
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+
+          const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+          const raw = await res.text();
+          let data = {};
+          try { data = raw ? JSON.parse(raw) : {}; }
+          catch { data = {}; }
+
+          if (!res.ok) {
+            throw jobError(data.error || `Job lookup failed (${res.status}).`, res.status, data);
+          }
+          if (data.status === 'done') return data.result;
+          if (data.status === 'error') {
+            throw jobError(data.error || 'Unexpected error', data.status_code || 500, data);
+          }
+        }
+
+        throw jobError(
+          'This is taking longer than expected. The playlist may still finish — check your Spotify account.',
+          504,
+          {}
+        );
+      }
+
       /* ── Search ─────────────────────────────────────────── */
       let searchDebounceId = null;
       let searchAbortController = null;
@@ -1183,7 +1223,8 @@
 
         setCreateLoading(true);
         try {
-          const result = await request('/api/create', payload);
+          const { job_id: jobId } = await request('/api/create', payload);
+          const result = await waitForJob(jobId);
 
           $('resTracks').textContent  = result.tracks_added;
           $('resAlbums').textContent  = result.albums_included;

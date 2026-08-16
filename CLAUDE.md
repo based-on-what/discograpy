@@ -37,8 +37,9 @@ src/
   web/
     __init__.py             Flask app factory; holds _client and _service singletons
     limiter.py              Flask-Limiter instance + the per-route limit strings
+    jobs.py                 In-memory background job store (ThreadPoolExecutor)
     routes.py               All HTTP routes: /, /callback, /api/album-types,
-                            /api/search, /api/create
+                            /api/search, /api/create, /api/jobs/<id>
   cli/
     runner.py               CLI orchestration
     ui.py                   Spinner, menus, artist/summary display
@@ -159,6 +160,55 @@ All filter logic lives in `src/domain/filters.py`.
 
 ---
 
+## Background jobs — /api/create is asynchronous
+
+Building a playlist for a large discography takes minutes. `/api/create` no
+longer does the work inline:
+
+```
+POST /api/create      validates input, submits to jobs.py, returns 202 {job_id}
+GET  /api/jobs/<id>   200 {"status": "pending"}
+                      200 {"status": "done",  "result": {...}}
+                      200 {"status": "error", "error": ..., "status_code": ...}
+                      404 unknown or expired job
+```
+
+The poll always answers 200 when the job exists; the *original* HTTP status
+travels in the body as `status_code`, and `JobError` extras (e.g.
+`auth_required: True`) are merged into the payload. That is how the frontend
+keeps its 401/`auth_required` handling. The frontend polls every 2s with a
+10-minute ceiling (`waitForJob()` in `templates/index.html`).
+
+The worker thread has no request or app context, so the closure in
+`create_playlist()` wraps its body in `with app.app_context():` — anything
+touching `current_app` (including `_ensure_spotify_token`) needs it.
+
+Finished jobs are purged one hour after `finished_at`. In-flight jobs are never
+purged regardless of how long they run.
+
+---
+
+## Gunicorn configuration — workers must stay at 1
+
+```
+gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300
+```
+
+Set in both `railway.toml` and `Procfile`. Keep them in sync.
+
+**`--workers 1` is not a performance choice, it is a correctness constraint.**
+Three pieces of state live in process memory: the job store in `jobs.py`, the
+`_client`/`_service` singletons, and the OAuth token in `MemoryCacheHandler`.
+With multiple workers a client would poll a worker that never saw its job, and
+each worker would refresh tokens independently — Spotify rotates refresh tokens,
+so the workers would invalidate each other's.
+
+`--threads 8` is the right scaling axis here: the workload is I/O-bound on the
+Spotify API, and threads share that in-process state. `--timeout 300` is now
+only a safety net, since no request blocks on a long build anymore.
+
+---
+
 ## Rate limiting and CORS
 
 Every visitor shares the server owner's Spotify creator token, so the API is
@@ -229,6 +279,11 @@ writing `.cache` files that would vanish between deploys.
   Spotify API and causes silent 400 errors.
 - **Do not** call `sp.auth_manager.get_access_token(check_cache=False)` in a hot
   path — it forces a token refresh on every call.
+- **Do not** raise `--workers` above 1 — the job store, the singletons and the
+  token cache are all per-process. Scale with `--threads` instead.
+- **Do not** add `CORS(app)` back — the frontend is same-origin, and CORS let any
+  site drive playlist creation on the owner's account.
+- **Do not** touch `current_app` inside a `jobs.py` worker without an app context.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

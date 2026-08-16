@@ -18,6 +18,11 @@ SEARCH_LIMIT = "20 per minute"
 # /api/create is the expensive one: it writes to the owner's Spotify account.
 CREATE_LIMITS = "5 per minute; 30 per hour"
 
+# /api/jobs/<id> is polled every 2s while a playlist builds, so a single long
+# job costs a few hundred cheap in-memory reads. Keep this well above the
+# default or the frontend throttles itself mid-build.
+POLL_LIMIT = "900 per hour"
+
 DEFAULT_LIMITS = ["200 per hour"]
 
 limiter = Limiter(

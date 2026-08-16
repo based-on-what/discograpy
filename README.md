@@ -152,7 +152,7 @@ Open `http://127.0.0.1:5000`.
 Production-style local run:
 
 ```bash
-gunicorn app:app --bind 0.0.0.0:5000
+gunicorn app:app --bind 0.0.0.0:5000 --workers 1 --threads 8 --timeout 300
 ```
 
 ### Flow
@@ -270,7 +270,7 @@ Console stream is reconfigured to UTF-8 with `errors='replace'` for Windows comp
 
 Deployed on [Railway](https://railway.app/) using Nixpacks.
 
-Start command: `gunicorn app:app --bind 0.0.0.0:$PORT`
+Start command: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300`
 
 Health check path: `/`
 
