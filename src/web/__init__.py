@@ -3,7 +3,9 @@ import os
 import threading
 
 from flask import Flask
-from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from src.web.limiter import limiter
 
 _client = None
 _service = None
@@ -44,10 +46,25 @@ def create_app() -> Flask:
         template_folder=os.path.join(_root, "templates"),
     )
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", "discograpy-dev-secret")
-    CORS(app)
+
+    # Railway terminates TLS in front of gunicorn, so request.remote_addr is the
+    # proxy without this and every visitor would share one rate-limit bucket.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
+    # No CORS: the frontend is served by this same app and calls the API with
+    # relative paths, so no cross-origin caller should reach these routes.
+    limiter.init_app(app)
 
     from src.web.routes import bp
     app.register_blueprint(bp)
+
+    @app.errorhandler(429)
+    def handle_rate_limit(error):
+        from flask import jsonify
+        return (
+            jsonify({"error": f"Too many requests — {error.description}. Wait and try again."}),
+            429,
+        )
 
     @app.errorhandler(Exception)
     def handle_unexpected_error(error: Exception):

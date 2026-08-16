@@ -58,7 +58,7 @@ Construido sobre la [Spotify Web API](https://developer.spotify.com/documentatio
 
 - Python 3.8+
 - Cuenta de Spotify Developer con credenciales de app
-- Paquetes Python: `flask`, `gunicorn`, `spotipy`, `python-dotenv`, `flask-cors`, `requests`, `pycountry`
+- Paquetes Python: `flask`, `gunicorn`, `spotipy`, `python-dotenv`, `Flask-Limiter`, `requests`, `pycountry`
 
 ---
 

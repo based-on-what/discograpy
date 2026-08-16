@@ -36,6 +36,7 @@ src/
                             in Railway if Spotify rotates it; falls back to MemoryCacheHandler
   web/
     __init__.py             Flask app factory; holds _client and _service singletons
+    limiter.py              Flask-Limiter instance + the per-route limit strings
     routes.py               All HTTP routes: /, /callback, /api/album-types,
                             /api/search, /api/create
   cli/
@@ -155,6 +156,33 @@ All filter logic lives in `src/domain/filters.py`.
   then keeps the highest-priority version (LP > EP > Single).
 - `include_duplicate_versions=True` disables deduplication entirely — all URIs
   are returned as-is.
+
+---
+
+## Rate limiting and CORS
+
+Every visitor shares the server owner's Spotify creator token, so the API is
+rate-limited per remote address with `Flask-Limiter` (in-memory storage — limits
+are per gunicorn worker, which is fine for the single-worker Railway deploy).
+
+| Route | Limit | Defined in |
+|---|---|---|
+| `/api/search` | 20/minute | `SEARCH_LIMIT` |
+| `/api/create` | 5/minute, 30/hour | `CREATE_LIMITS` |
+| everything else | 200/hour | `DEFAULT_LIMITS` |
+
+`/api/search` fires on a 350ms input debounce in the frontend, so its limit has
+to tolerate a user typing an artist name in bursts — do not lower it below ~20.
+
+`ProxyFix(x_for=1)` is applied in `create_app()` because Railway terminates TLS
+in front of gunicorn; without it `remote_addr` is the proxy and every visitor
+shares a single bucket. The tradeoff: if the app is ever exposed directly to the
+internet with no proxy, a client can spoof `X-Forwarded-For` to evade the limit.
+
+There is **no CORS**. `flask-cors` was removed: the frontend is served by this
+same Flask app and calls the API with relative paths, so nothing legitimate is
+cross-origin. Do not add `CORS(app)` back — it let any site drive playlist
+creation on the owner's account from a visitor's browser.
 
 ---
 

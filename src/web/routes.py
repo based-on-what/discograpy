@@ -7,6 +7,7 @@ from spotipy.exceptions import SpotifyException
 
 from src.domain import album_types as at
 from src.services.spotify_client import SpotifyClient
+from src.web.limiter import CREATE_LIMITS, SEARCH_LIMIT, limiter
 
 bp = Blueprint("main", __name__)
 
@@ -113,6 +114,7 @@ def album_types():
 
 
 @bp.post("/api/search")
+@limiter.limit(SEARCH_LIMIT)
 def search_artist():
     from flask import current_app
 
@@ -147,6 +149,7 @@ def search_artist():
 
 
 @bp.post("/api/create")
+@limiter.limit(CREATE_LIMITS)
 def create_playlist():
     from src.web import get_client, get_service
 
