@@ -28,6 +28,7 @@ def responses(monkeypatch):
 
     monkeypatch.setattr(musicbrainz._session, "get", fake_get)
     monkeypatch.setattr(musicbrainz, "_throttle", lambda: None)
+    monkeypatch.setattr(musicbrainz, "_cache", {}, raising=False)
     return queue
 
 
@@ -51,4 +52,14 @@ class TestLookupArtistMetadata:
         second = musicbrainz.lookup_artist_metadata("Cached Artist")
 
         assert first == second
+        assert responses == []
+
+    def test_a_cached_result_can_be_read_without_a_request(self, responses):
+        responses.append({"artists": [{"name": "Cached Artist", "score": 100, "country": "GB"}]})
+
+        before = musicbrainz.cached_artist_metadata("Cached Artist")
+        looked_up = musicbrainz.lookup_artist_metadata("Cached Artist")
+
+        assert before is None
+        assert musicbrainz.cached_artist_metadata("Cached Artist") == looked_up
         assert responses == []

@@ -1,7 +1,6 @@
 import base64
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -11,6 +10,15 @@ from spotipy.exceptions import SpotifyException
 from src.services.retry import retry_on_failure
 
 _session = requests.Session()
+
+# Spotify's cap on ids per "get several albums" request.
+ALBUM_BATCH_SIZE = 20
+
+# The fields album selection and filters.select_tracks read. Everything else is
+# dropped on arrival: Spotify sends ~185 market codes per album and per track,
+# which dominated a job's memory.
+_ALBUM_FIELDS = ("id", "name", "album_type", "total_tracks", "release_date")
+_TRACK_FIELDS = ("name", "uri", "duration_ms", "disc_number", "track_number")
 
 
 class SpotifyClient:
@@ -65,19 +73,40 @@ class SpotifyClient:
     def get_artist(self, artist_id: str) -> Dict[str, Any]:
         return self.sp.artist(artist_id)
 
-    @retry_on_failure(max_retries=5)
     def get_artist_albums(self, artist_id: str, album_types: List[str]) -> List[Dict[str, Any]]:
-        include_groups = ",".join(album_types)
-        results = self.sp.artist_albums(artist_id=artist_id, include_groups=include_groups, limit=50)
-        albums = self._paginate(results, "items")
-        valid = [a for a in albums if a.get("release_date")]
+        # Not retried as a whole: each page request retries on its own, so a
+        # failing page does not send the pagination back to page one.
+        albums = self._paginate(self._first_albums_page(artist_id, ",".join(album_types)))
+        valid = [
+            {field: a[field] for field in _ALBUM_FIELDS if field in a}
+            for a in albums
+            if a.get("release_date")
+        ]
         valid.sort(key=lambda a: a["release_date"])
         return valid
 
     @retry_on_failure(max_retries=5)
-    def get_album_tracks(self, album_id: str) -> List[Dict[str, Any]]:
-        results = self.sp.album_tracks(album_id=album_id, limit=50)
-        return self._paginate(results, "items")
+    def _first_albums_page(self, artist_id: str, include_groups: str) -> Dict[str, Any]:
+        return self.sp.artist_albums(artist_id=artist_id, include_groups=include_groups, limit=50)
+
+    def get_tracks_by_album(self, album_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """Tracks of up to ALBUM_BATCH_SIZE albums from a single request.
+
+        An album Spotify answers with null is absent from the result.
+        """
+        albums = self._albums_batch(album_ids).get("albums") or []
+        return {
+            album_id: [
+                {field: track[field] for field in _TRACK_FIELDS if field in track}
+                for track in self._paginate(album["tracks"])
+            ]
+            for album_id, album in zip(album_ids, albums)
+            if album
+        }
+
+    @retry_on_failure(max_retries=5)
+    def _albums_batch(self, album_ids: List[str]) -> Dict[str, Any]:
+        return self.sp.albums(album_ids)
 
     @retry_on_failure(max_retries=5)
     def create_playlist(self, playlist_name: str, description: str) -> Dict[str, Any]:
@@ -91,16 +120,11 @@ class SpotifyClient:
         )
 
     def add_tracks_to_playlist(self, playlist_id: str, track_uris: List[str]) -> None:
+        # One batch at a time on purpose: Spotify appends each batch as it
+        # arrives, so batches sent concurrently can land out of playlist order.
         batch_size = 100
-        batches = [track_uris[i : i + batch_size] for i in range(0, len(track_uris), batch_size)]
-        if len(batches) <= 1:
-            if batches:
-                self._add_batch(playlist_id, batches[0])
-            return
-        with ThreadPoolExecutor(max_workers=min(4, len(batches))) as pool:
-            futures = [pool.submit(self._add_batch, playlist_id, b) for b in batches]
-            for f in as_completed(futures):
-                f.result()
+        for start in range(0, len(track_uris), batch_size):
+            self._add_batch(playlist_id, track_uris[start : start + batch_size])
 
     @retry_on_failure(max_retries=5)
     def _add_batch(self, playlist_id: str, batch: List[str]) -> None:

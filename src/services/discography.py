@@ -1,17 +1,29 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.domain import album_types as at
 from src.domain import filters as fl
 from src.domain.models import RunSummary
 from src.services import musicbrainz
-from src.services.spotify_client import SpotifyClient
+from src.services.spotify_client import ALBUM_BATCH_SIZE, SpotifyClient
 
 PLAYLIST_DESCRIPTION = (
     "Made with DiscograPY, an open-source Spotify discography creator. "
     "Find the website at https://discograpy.up.railway.app "
 )
+
+# Shared by every job in the process, so the fan-out against the one Spotify
+# token is capped here no matter how many playlists are being built at once.
+MAX_CONCURRENT_FETCHES = 8
+_FETCH_POOL = ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_FETCHES, thread_name_prefix="discograpy-fetch"
+)
+
+# MusicBrainz allows 1 request/second, so one worker is the whole queue. A
+# search waits this long for its lookups and answers with whatever is ready.
+MB_ENRICH_BUDGET_SECONDS = 1.5
+_MB_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="discograpy-mb")
 
 
 class DiscographyService:
@@ -39,13 +51,21 @@ class DiscographyService:
         valid = [a for a in artists if a.get("id")]
         limit = self.MB_ENRICH_LIMIT if mb_limit is None else mb_limit
 
-        def _enrich(artist: Dict[str, Any], with_musicbrainz: bool) -> Dict[str, Any]:
+        lookups = [
+            _MB_POOL.submit(musicbrainz.lookup_artist_metadata, (artist.get("name") or "").strip())
+            for artist in valid[:limit]
+        ]
+        wait(lookups, timeout=MB_ENRICH_BUDGET_SECONDS)
+        # Dropping the lookups that never started keeps abandoned searches from
+        # piling up behind the one-per-second MusicBrainz queue.
+        for lookup in lookups:
+            lookup.cancel()
+
+        def _enrich(index: int, artist: Dict[str, Any]) -> Dict[str, Any]:
             mb_data: Dict[str, Any] = {"genres": [], "country": None}
-            if with_musicbrainz:
+            if index < len(lookups) and lookups[index].done() and not lookups[index].cancelled():
                 try:
-                    mb_data = musicbrainz.lookup_artist_metadata(
-                        (artist.get("name") or "").strip()
-                    )
+                    mb_data = lookups[index].result()
                 except Exception as exc:
                     self.logger.warning("Enrichment failed for %s: %s", artist.get("id"), exc)
             mb_genres = [g for g in (mb_data.get("genres") or []) if g][:3]
@@ -59,9 +79,7 @@ class DiscographyService:
                 "location": mb_data.get("country") or "Unknown",
             }
 
-        # Sequential on purpose: lookup_artist_metadata throttles to 1 req/s
-        # (MusicBrainz limit), so parallel workers would only queue on the lock.
-        return [_enrich(a, with_musicbrainz=i < limit) for i, a in enumerate(valid)]
+        return [_enrich(index, artist) for index, artist in enumerate(valid)]
 
     def get_filtered_albums(
         self, artist_id: str, selection: int
@@ -79,27 +97,34 @@ class DiscographyService:
         include_instrumentals: bool = False,
         include_duplicate_versions: bool = False,
     ) -> Tuple[List[str], int]:
-        max_workers = min(8, len(albums) or 1)
+        fetchable = [album for album in albums if album.get("id")]
+        batches = [
+            fetchable[start : start + ALBUM_BATCH_SIZE]
+            for start in range(0, len(fetchable), ALBUM_BATCH_SIZE)
+        ]
         albums_with_tracks: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(self.client.get_album_tracks, album["id"]): album
-                for album in albums
-                if album.get("id")
-            }
-            for future in as_completed(future_map):
-                album = future_map[future]
-                try:
-                    tracks = future.result()
-                except Exception as exc:
+        future_map = {
+            _FETCH_POOL.submit(self.client.get_tracks_by_album, [album["id"] for album in batch]): batch
+            for batch in batches
+        }
+        for future in as_completed(future_map):
+            batch = future_map[future]
+            try:
+                tracks_by_album = future.result()
+            except Exception as exc:
+                self.logger.warning(
+                    "Skipping %d albums - failed to fetch their tracks: %s", len(batch), exc
+                )
+                continue
+            for album in batch:
+                if album["id"] not in tracks_by_album:
                     self.logger.warning(
-                        "Skipping album %r - failed to fetch tracks: %s",
-                        album.get("name", album.get("id")),
-                        exc,
+                        "Skipping album %r - Spotify returned no tracks for it",
+                        album.get("name", album["id"]),
                     )
                     continue
-                albums_with_tracks.append((album, tracks))
+                albums_with_tracks.append((album, tracks_by_album[album["id"]]))
 
         uris, total_ms, album_counts = fl.select_tracks(
             albums_with_tracks,

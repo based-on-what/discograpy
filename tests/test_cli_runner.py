@@ -27,8 +27,8 @@ class FakeSpotifyClient:
     def get_artist_albums(self, artist_id, album_types):
         return [ALBUM]
 
-    def get_album_tracks(self, album_id):
-        return self.tracks
+    def get_tracks_by_album(self, album_ids):
+        return {album_id: self.tracks for album_id in album_ids}
 
     def create_playlist(self, playlist_name, description):
         self.created.append(playlist_name)

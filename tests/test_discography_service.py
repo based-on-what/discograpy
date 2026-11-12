@@ -1,23 +1,34 @@
 import logging
+import threading
+import time
+
+from types import SimpleNamespace
 
 import pytest
 
+from src.services import discography, musicbrainz
 from src.services.discography import DiscographyService
 
 logger = logging.getLogger("tests")
 
 
 class FakeSpotifyClient:
-    """Only what collect_tracks needs: get_album_tracks keyed by album id."""
+    """Only what collect_tracks needs: get_tracks_by_album keyed by album id."""
 
     def __init__(self, tracks_by_album, failing_album_ids=()):
         self.tracks_by_album = tracks_by_album
         self.failing_album_ids = set(failing_album_ids)
+        self.requested_batches = []
 
-    def get_album_tracks(self, album_id):
-        if album_id in self.failing_album_ids:
+    def get_tracks_by_album(self, album_ids):
+        self.requested_batches.append(list(album_ids))
+        if self.failing_album_ids.intersection(album_ids):
             raise RuntimeError("boom")
-        return self.tracks_by_album[album_id]
+        return {
+            album_id: self.tracks_by_album[album_id]
+            for album_id in album_ids
+            if album_id in self.tracks_by_album
+        }
 
 
 def track(name, uri=None, duration_ms=200_000, disc=1, num=1):
@@ -139,14 +150,47 @@ class TestCollectTracks:
         uris, _ = make_service(tracks).collect_tracks(albums, include_instrumentals=True)
         assert uris == ["uri:vocal"]
 
-    def test_failed_album_fetch_is_skipped(self):
+    def test_album_spotify_does_not_return_is_skipped(self):
         albums = [
             album("bad", "Broken", release_date="2019-01-01"),
             album("good", "Works", release_date="2020-01-01"),
         ]
         tracks = {"good": [track("Song")]}
-        uris, _ = make_service(tracks, failing={"bad"}).collect_tracks(albums)
+        uris, _ = make_service(tracks).collect_tracks(albums)
         assert uris == ["spotify:track:song"]
+
+    def test_albums_are_requested_twenty_at_a_time(self):
+        albums = [album(f"a{n:02d}", f"Album {n}", release_date=f"20{n:02d}-01-01") for n in range(45)]
+        tracks = {a["id"]: [track(f"Song {a['id']}")] for a in albums}
+        service = make_service(tracks)
+
+        uris, _ = service.collect_tracks(albums)
+
+        assert len(uris) == 45
+        assert sorted(len(batch) for batch in service.client.requested_batches) == [5, 20, 20]
+
+    def test_a_failed_batch_only_loses_the_album_that_keeps_failing(self):
+        albums = [album(f"a{n:02d}", f"Album {n}", release_date=f"20{n:02d}-01-01") for n in range(21)]
+        tracks = {a["id"]: [track(f"Song {a['id']}")] for a in albums}
+
+        uris, _ = make_service(tracks, failing={"a00"}).collect_tracks(albums)
+
+        assert uris == [f"spotify:track:song-a{n:02d}" for n in range(1, 21)]
+
+    def test_albums_released_the_same_day_keep_the_order_spotify_listed_them_in(self):
+        albums = [album(f"a{n:02d}", f"Album {n}") for n in range(45)]
+        tracks = {a["id"]: [track(f"Song {a['id']}")] for a in albums}
+
+        class LastBatchAnswersFirst(FakeSpotifyClient):
+            def get_tracks_by_album(self, album_ids):
+                if len(album_ids) == 20:
+                    time.sleep(0.05)
+                return super().get_tracks_by_album(album_ids)
+
+        service = DiscographyService(client=LastBatchAnswersFirst(tracks), logger=logger, dry_run=True)
+        uris, _ = service.collect_tracks(albums)
+
+        assert uris == [f"spotify:track:song-a{n:02d}" for n in range(45)]
 
     def test_tracks_without_uri_skipped(self):
         albums = [album("a1", "Album")]
@@ -172,6 +216,145 @@ class TestCollectTracks:
         }
         uris, _ = make_service(tracks).collect_tracks(albums)
         assert uris == ["spotify:track:d1t1", "spotify:track:d1t2", "spotify:track:d2t1"]
+
+
+class TestFetchConcurrency:
+    def test_jobs_running_at_once_share_one_cap_on_spotify_requests(self):
+        lock = threading.Lock()
+        in_flight = []
+        peaks = []
+
+        class SlowClient(FakeSpotifyClient):
+            def get_tracks_by_album(self, album_ids):
+                with lock:
+                    in_flight.append(1)
+                    peaks.append(len(in_flight))
+                time.sleep(0.05)
+                with lock:
+                    in_flight.pop()
+                return super().get_tracks_by_album(album_ids)
+
+        albums = [album(f"a{n:02d}", f"Album {n}") for n in range(60)]
+        tracks = {a["id"]: [track(f"Song {a['id']}")] for a in albums}
+        service = DiscographyService(client=SlowClient(tracks), logger=logger, dry_run=True)
+
+        jobs = [threading.Thread(target=service.collect_tracks, args=(albums,)) for _ in range(4)]
+        for job in jobs:
+            job.start()
+        for job in jobs:
+            job.join()
+
+        assert max(peaks) <= discography.MAX_CONCURRENT_FETCHES
+
+
+class TestEnrichArtists:
+    ARTIST = {"id": "ar1", "name": "Artist", "genres": ["pop"], "followers": {"total": 7}}
+
+    def test_top_results_get_musicbrainz_location_and_genres(self, monkeypatch):
+        monkeypatch.setattr(
+            musicbrainz, "lookup_artist_metadata", lambda name: {"genres": ["rock"], "country": "Chile"}
+        )
+
+        enriched = make_service({}).enrich_artists([self.ARTIST])
+
+        assert enriched == [
+            {"id": "ar1", "name": "Artist", "followers": 7, "genres": ["rock"], "image_url": None,
+             "location": "Chile"}
+        ]
+
+    def test_results_past_the_limit_skip_musicbrainz(self, monkeypatch):
+        looked_up = []
+        monkeypatch.setattr(
+            musicbrainz, "lookup_artist_metadata",
+            lambda name: looked_up.append(name) or {"genres": [], "country": "Chile"},
+        )
+        artists = [{"id": f"ar{n}", "name": f"Artist {n}"} for n in range(3)]
+
+        enriched = make_service({}).enrich_artists(artists, mb_limit=2)
+
+        assert looked_up == ["Artist 0", "Artist 1"]
+        assert [a["location"] for a in enriched] == ["Chile", "Chile", "Unknown"]
+
+    def test_a_slow_musicbrainz_does_not_hold_the_search_past_its_budget(self, slow_musicbrainz):
+        started = time.perf_counter()
+        enriched = make_service({}).enrich_artists([self.ARTIST])
+
+        assert time.perf_counter() - started < 1
+        assert enriched[0]["location"] == "Unknown"
+        assert enriched[0]["genres"] == ["pop"]
+
+    def test_a_lookup_that_outlives_the_budget_is_ready_for_the_next_search(self, slow_musicbrainz):
+        service = make_service({})
+        service.enrich_artists([self.ARTIST])
+
+        slow_musicbrainz.finish_pending_lookups()
+        enriched = service.enrich_artists([self.ARTIST])
+
+        assert enriched[0]["location"] == "Chile"
+        assert slow_musicbrainz.requested == ["Artist"]
+
+    def test_an_artist_already_looked_up_does_not_queue_behind_a_slow_lookup(self, slow_musicbrainz):
+        service = make_service({})
+        service.enrich_artists([self.ARTIST])
+        slow_musicbrainz.finish_pending_lookups()
+        slow_musicbrainz.block_again()
+        service.enrich_artists([{"id": "ar2", "name": "Someone Slow"}])
+
+        started = time.perf_counter()
+        enriched = service.enrich_artists([self.ARTIST])
+
+        assert time.perf_counter() - started < 0.04
+        assert enriched[0]["location"] == "Chile"
+
+    def test_searches_stop_queueing_lookups_once_the_backlog_is_full(self, slow_musicbrainz, monkeypatch):
+        monkeypatch.setattr(discography, "_MB_BACKLOG", threading.BoundedSemaphore(2))
+        artists = [{"id": f"ar{n}", "name": f"Artist {n}"} for n in range(5)]
+
+        make_service({}).enrich_artists(artists)
+        slow_musicbrainz.finish_pending_lookups()
+
+        assert slow_musicbrainz.requested == ["Artist 0", "Artist 1"]
+
+    def test_a_negative_limit_looks_nothing_up(self, slow_musicbrainz):
+        make_service({}).enrich_artists([self.ARTIST], mb_limit=-1)
+        slow_musicbrainz.finish_pending_lookups()
+
+        assert slow_musicbrainz.requested == []
+
+
+class SlowMusicBrainz:
+    """A MusicBrainz that answers only when told to, at the HTTP layer so the real cache is used."""
+
+    def __init__(self):
+        self.requested = []
+        self._release = threading.Event()
+
+    def get(self, endpoint, params, headers, timeout):
+        name = params["query"].removeprefix('artist:"').removesuffix('"')
+        self.requested.append(name)
+        self._release.wait(5)
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"artists": [{"name": name, "score": 100, "area": {"name": "Chile"}}]},
+        )
+
+    def finish_pending_lookups(self):
+        self._release.set()
+        discography._MB_POOL.submit(lambda: None).result(timeout=5)
+
+    def block_again(self):
+        self._release.clear()
+
+
+@pytest.fixture
+def slow_musicbrainz(monkeypatch):
+    fake = SlowMusicBrainz()
+    monkeypatch.setattr(musicbrainz, "_session", fake)
+    monkeypatch.setattr(musicbrainz, "_throttle", lambda: None)
+    monkeypatch.setattr(musicbrainz, "_cache", {})
+    monkeypatch.setattr(discography, "MB_ENRICH_BUDGET_SECONDS", 0.05)
+    yield fake
+    fake.finish_pending_lookups()
 
 
 class TestBuildPlaylistDryRun:

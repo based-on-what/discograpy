@@ -90,7 +90,7 @@ These are hard limits that cause 400 errors if exceeded.
 |---|---|---|
 | `sp.search()` | `limit=50` | ~~`limit=100`~~ |
 | `sp.artist_albums()` | `limit=50` | ~~`limit=100`~~ |
-| `sp.album_tracks()` | `limit=50` | ~~`limit=100`~~ |
+| `sp.albums()` | max 20 ids/call | handled via `ALBUM_BATCH_SIZE` |
 | `sp.playlist_add_items()` | max 100 tracks/call | handled via batching |
 
 The `_paginate()` method in `SpotifyClient` handles multi-page results automatically
