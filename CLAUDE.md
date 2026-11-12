@@ -22,6 +22,8 @@ playlists.py                CLI entry point
 get_token.py                One-time local helper: prints a fresh SPOTIPY_REFRESH_TOKEN
 src/
   config.py                 Spotify client factory - only place SpotifyOAuth is constructed
+                            (build_spotify_client for the app, build_interactive_auth
+                            for get_token.py)
   logging_config.py         UTF-8-safe logging to file + console
   domain/
     album_types.py          7 album-type modes, EP detection logic, playlist suffix
@@ -251,8 +253,8 @@ creation on the owner's account from a visitor's browser.
 - `ValueError` from service layer -> 400 to client.
 - `EnvironmentError` (missing env vars) -> 500 to client.
 - The `@retry_on_failure` decorator handles 429 (rate limit) and transient errors
-  with exponential backoff. It reads `Retry-After` headers. It is applied to the
-  `SpotifyClient` methods that make API calls, except `search_artists()`.
+  with exponential backoff. It reads `Retry-After` headers. It is applied to all
+  `SpotifyClient` methods that make API calls.
 - `SpotifyClient.ensure_token()` is the pre-flight check before each API route.
   It returns `False` when there is no usable token: if `SPOTIPY_REFRESH_TOKEN` is
   set but the refresh returns `None`, it does **not** fall back to the expired

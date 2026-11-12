@@ -1,9 +1,22 @@
 import os
 
 import spotipy
+from spotipy.cache_handler import CacheFileHandler
 from spotipy.oauth2 import SpotifyOAuth
 
 SCOPE = "playlist-modify-public playlist-modify-private ugc-image-upload"
+
+
+def build_interactive_auth() -> SpotifyOAuth:
+    """Browser-based auth for get_token.py, the one-time local token helper."""
+    return SpotifyOAuth(
+        client_id=os.getenv("SPOTIPY_CLIENT_ID"),
+        client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
+        redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI"),
+        scope=SCOPE,
+        cache_handler=CacheFileHandler(cache_path=".spotify_cache"),
+        open_browser=True,
+    )
 
 
 def build_spotify_client() -> spotipy.Spotify:
@@ -28,7 +41,7 @@ def build_spotify_client() -> spotipy.Spotify:
         # En Railway el filesystem es efímero: MemoryCacheHandler evita depender
         # de un archivo .cache que desaparece en cada redeploy.
         # RailwayAwareCacheHandler además actualiza SPOTIPY_REFRESH_TOKEN en Railway
-        # si Spotify rota el refresh token — requiere RAILWAY_API_TOKEN configurado.
+        # si Spotify rota el refresh token; requiere RAILWAY_API_TOKEN configurado.
         from src.services.railway_cache import RailwayAwareCacheHandler
 
         cache_handler = RailwayAwareCacheHandler(
