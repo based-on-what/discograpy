@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional
 
 import requests as _requests
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, jsonify, redirect, render_template, request, url_for
 from spotipy.exceptions import SpotifyException
 
 from src.domain import album_types as at
@@ -63,8 +63,6 @@ def index():
 
 @bp.route("/callback")
 def callback():
-    from flask import current_app
-
     from src.web import get_client
 
     code = request.args.get("code")
@@ -92,8 +90,6 @@ def album_types():
 @bp.post("/api/search")
 @limiter.limit(SEARCH_LIMIT)
 def search_artist():
-    from flask import current_app
-
     from src.web import get_client, get_service
 
     data = request.get_json(silent=True) or {}
@@ -129,8 +125,6 @@ def search_artist():
 @bp.post("/api/create")
 @limiter.limit(CREATE_LIMITS)
 def create_playlist():
-    from flask import current_app
-
     from src.web import get_client, get_service
 
     data = request.get_json(silent=True) or {}

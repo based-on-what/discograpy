@@ -4,16 +4,24 @@ from typing import Any, Dict, List, Set, Tuple
 
 from src.domain.album_types import album_release_priority
 
-_RE_LIVE = re.compile(r"\b(live|en vivo|acoustic live)\b", re.IGNORECASE)
-_RE_DEMO = re.compile(r"\b(demo|rough mix|work tape|unreleased demo)\b", re.IGNORECASE)
-_RE_REMIX = re.compile(r"\b(remix|rework|edit|extended mix|club mix|dub mix)\b", re.IGNORECASE)
-_RE_INSTRUMENTAL = re.compile(r"\b(instrumental)\b", re.IGNORECASE)
+_LIVE = "live|en vivo|acoustic live"
+_DEMO = "demo|rough mix|work tape|unreleased demo"
+_REMIX = "remix|rework|edit|extended mix|club mix|dub mix"
+_INSTRUMENTAL = "instrumental"
+
+
+def _whole_words(alternatives: str) -> "re.Pattern[str]":
+    return re.compile(rf"\b({alternatives})\b", re.IGNORECASE)
+
+
+_RE_LIVE = _whole_words(_LIVE)
+_RE_DEMO = _whole_words(_DEMO)
+_RE_REMIX = _whole_words(_REMIX)
+_RE_INSTRUMENTAL = _whole_words(_INSTRUMENTAL)
 _RE_BRACKETS = re.compile(r"[\[\(].*?[\]\)]")
-_RE_KEYWORDS = re.compile(
-    r"\b(live|en vivo|acoustic live|demo|rough mix|work tape|unreleased demo|"
-    r"remix|rework|edit|extended mix|club mix|dub mix|instrumental)\b",
-    re.IGNORECASE,
-)
+# Built from the marker lists above so a new marker is also stripped when
+# normalizing titles for deduplication.
+_RE_KEYWORDS = _whole_words("|".join((_LIVE, _DEMO, _REMIX, _INSTRUMENTAL)))
 _RE_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
@@ -101,15 +109,12 @@ def select_tracks(
 
     # Collected up front so an instrumental finds its vocal counterpart even
     # when that counterpart sits on a later album.
-    non_instrumental_bases: Set[str] = set()
-    for album, tracks in ordered:
-        album_name = album.get("name", "Unknown")
-        for track in tracks:
-            name = str(track.get("name", ""))
-            if not has_instrumental_marker(f"{name} {album_name}"):
-                base = normalize(name)
-                if base:
-                    non_instrumental_bases.add(base)
+    non_instrumental_bases = {
+        normalize(str(track.get("name", "")))
+        for album, tracks in ordered
+        for track in tracks
+        if not has_instrumental_marker(f"{track.get('name', '')} {album.get('name', 'Unknown')}")
+    } - {""}
 
     uri_to_duration: Dict[str, int] = {}
     track_candidates: List[Tuple[str, str, int, int]] = []
