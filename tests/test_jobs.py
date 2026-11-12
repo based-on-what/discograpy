@@ -60,15 +60,18 @@ class TestErrors:
             "auth_required": True,
         }
 
-    def test_unexpected_exception_becomes_a_500(self):
+    def test_unexpected_exception_becomes_a_generic_500(self, caplog):
         def work():
-            raise RuntimeError("boom")
+            raise RuntimeError("boom at /srv/app/secret-path")
 
         payload = wait_until_settled(jobs.submit(work))
 
-        assert payload["status"] == "error"
-        assert payload["status_code"] == 500
-        assert "boom" in payload["error"]
+        assert payload == {
+            "status": "error",
+            "error": "Internal server error",
+            "status_code": 500,
+        }
+        assert "boom at /srv/app/secret-path" in caplog.text
 
     def test_a_failing_job_does_not_kill_the_executor(self):
         wait_until_settled(jobs.submit(lambda: (_ for _ in ()).throw(RuntimeError("boom"))))

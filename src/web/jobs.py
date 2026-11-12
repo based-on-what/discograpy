@@ -9,11 +9,14 @@ gunicorn MUST run with ``--workers 1 --threads N``: with several workers a
 client would poll a worker that never saw its own job. See CLAUDE.md.
 """
 
+import logging
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 # Finished jobs stay readable for an hour, then get purged so the dict does not
 # grow without bound in a long-lived process.
@@ -80,10 +83,13 @@ def _run(job_id: str, work: Callable[[], Dict[str, Any]]) -> None:
             "status_code": exc.status_code,
             "extra": exc.extra,
         }
-    except Exception as exc:  # noqa: BLE001 - the job must never die silently
+    except Exception:  # noqa: BLE001 - the job must never die silently
+        # The detail goes to the log only: the client gets the same generic
+        # message the app-wide error handler returns.
+        logger.exception("Job %s failed with an unexpected error", job_id)
         record = {
             "status": "error",
-            "error": f"Internal server error: {exc}",
+            "error": "Internal server error",
             "status_code": 500,
             "extra": {},
         }
