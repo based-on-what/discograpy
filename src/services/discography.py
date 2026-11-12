@@ -116,6 +116,31 @@ class DiscographyService:
             )
         return uris, total_ms
 
+    def publish(
+        self,
+        playlist_name: str,
+        track_uris: List[str],
+        artist_id: Optional[str] = None,
+        use_artist_image_as_cover: bool = False,
+    ) -> Tuple[Optional[str], bool, Optional[str]]:
+        """Create the playlist on Spotify. Returns (playlist_id, cover_applied, cover_error)."""
+        if self.dry_run:
+            return None, False, None
+
+        playlist_id = self.client.create_playlist(playlist_name, PLAYLIST_DESCRIPTION).get("id")
+        if not playlist_id:
+            return None, False, None
+
+        self.client.add_tracks_to_playlist(playlist_id, track_uris)
+        if not (use_artist_image_as_cover and artist_id):
+            return playlist_id, False, None
+
+        cover_applied, cover_error = self.client.set_playlist_cover_from_artist(
+            playlist_id=playlist_id,
+            artist_id=artist_id,
+        )
+        return playlist_id, cover_applied, cover_error
+
     def build_playlist(
         self,
         artist_id: str,
@@ -147,20 +172,12 @@ class DiscographyService:
         if not track_uris:
             raise ValueError("No tracks found for selected albums")
 
-        playlist_id: Optional[str] = None
-        cover_applied = False
-        cover_error: Optional[str] = None
-
-        if not self.dry_run:
-            playlist = self.client.create_playlist(playlist_name, PLAYLIST_DESCRIPTION)
-            playlist_id = playlist.get("id")
-            if playlist_id:
-                self.client.add_tracks_to_playlist(playlist_id, track_uris)
-                if use_artist_image_as_cover:
-                    cover_applied, cover_error = self.client.set_playlist_cover_from_artist(
-                        playlist_id=playlist_id,
-                        artist_id=artist_id,
-                    )
+        playlist_id, cover_applied, cover_error = self.publish(
+            playlist_name,
+            track_uris,
+            artist_id=artist_id,
+            use_artist_image_as_cover=use_artist_image_as_cover,
+        )
 
         return RunSummary(
             artist=artist_name,

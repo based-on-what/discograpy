@@ -192,3 +192,81 @@ class TestBuildPlaylistDryRun:
         assert summary.playlist_name == "Artist discography [ALBUMS]"
         assert summary.tracks_added == 1
         assert summary.albums_included == 1
+
+
+class PublishingClient(FakeSpotifyClient):
+    def __init__(self, tracks_by_album, playlist=None, cover=(True, None)):
+        super().__init__(tracks_by_album)
+        self.playlist = {"id": "pl1"} if playlist is None else playlist
+        self.cover = cover
+        self.added = []
+        self.cover_requests = []
+
+    def create_playlist(self, playlist_name, description):
+        return self.playlist
+
+    def add_tracks_to_playlist(self, playlist_id, track_uris):
+        self.added.append((playlist_id, track_uris))
+
+    def set_playlist_cover_from_artist(self, playlist_id, artist_id):
+        self.cover_requests.append((playlist_id, artist_id))
+        return self.cover
+
+
+def publishing_service(client):
+    service = DiscographyService(client=client, logger=logger, dry_run=False)
+    service.get_filtered_albums = lambda artist_id, selection: ([album("a1", "The LP")], {"album"})
+    return service
+
+
+class TestBuildPlaylistPublishes:
+    def test_adds_the_collected_tracks_to_the_new_playlist(self):
+        client = PublishingClient({"a1": [track("Song")]})
+
+        summary = publishing_service(client).build_playlist("artist-id", "Artist", 1)
+
+        assert summary.playlist_id == "pl1"
+        assert client.added == [("pl1", ["spotify:track:song"])]
+        assert client.cover_requests == []
+        assert summary.cover_applied is False
+
+    def test_cover_is_requested_only_when_asked(self):
+        client = PublishingClient({"a1": [track("Song")]}, cover=(False, "too big"))
+
+        summary = publishing_service(client).build_playlist(
+            "artist-id", "Artist", 1, use_artist_image_as_cover=True
+        )
+
+        assert client.cover_requests == [("pl1", "artist-id")]
+        assert summary.cover_applied is False
+        assert summary.cover_error == "too big"
+
+    def test_nothing_is_added_when_spotify_returns_no_playlist_id(self):
+        client = PublishingClient({"a1": [track("Song")]}, playlist={"name": "no id"})
+
+        summary = publishing_service(client).build_playlist(
+            "artist-id", "Artist", 1, use_artist_image_as_cover=True
+        )
+
+        assert summary.playlist_id is None
+        assert client.added == []
+        assert client.cover_requests == []
+
+
+class TestPublish:
+    def test_returns_the_playlist_id_and_cover_outcome(self):
+        client = PublishingClient({})
+        service = DiscographyService(client=client, logger=logger)
+
+        result = service.publish("Artist discography", ["uri:a"], artist_id="artist-id",
+                                 use_artist_image_as_cover=True)
+
+        assert result == ("pl1", True, None)
+        assert client.added == [("pl1", ["uri:a"])]
+
+    def test_dry_run_publishes_nothing(self):
+        client = PublishingClient({})
+        service = DiscographyService(client=client, logger=logger, dry_run=True)
+
+        assert service.publish("Artist discography", ["uri:a"]) == (None, False, None)
+        assert client.added == []

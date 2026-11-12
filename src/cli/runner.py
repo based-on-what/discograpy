@@ -6,7 +6,7 @@ from spotipy.exceptions import SpotifyException
 from src.cli import ui
 from src.domain import album_types as at
 from src.domain.models import RunSummary
-from src.services.discography import PLAYLIST_DESCRIPTION, DiscographyService
+from src.services.discography import DiscographyService
 from src.services.spotify_client import SpotifyClient
 
 
@@ -16,10 +16,10 @@ def run(svc: DiscographyService, verbose: bool = False) -> None:
     except SpotifyException as exc:
         message = SpotifyClient.error_message(exc)
         logging.getLogger(__name__).error("Spotify API error: %s", exc)
-        print(f"\n✗ {message}")
+        print(f"\nERROR: {message}")
     except EnvironmentError as exc:
         logging.getLogger(__name__).error("Environment configuration error: %s", exc)
-        print(f"\n✗ {exc}")
+        print(f"\nERROR: {exc}")
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Process interrupted by user")
         print("\n\nProcess cancelled by user.")
@@ -98,11 +98,7 @@ def _create_discography_playlist(svc: DiscographyService, verbose: bool = False)
                 print("\nDry-run enabled: playlist will not be created and tracks will not be uploaded.")
             else:
                 with ui.Spinner("Creating playlist..."):
-                    playlist = svc.client.create_playlist(playlist_name, PLAYLIST_DESCRIPTION)
-                    playlist_id = playlist.get("id")
-
-                with ui.Spinner("Adding tracks to playlist..."):
-                    svc.client.add_tracks_to_playlist(playlist_id, track_uris)
+                    playlist_id, _, _ = svc.publish(playlist_name, track_uris)
 
             summary = RunSummary(
                 artist=selected_name,
