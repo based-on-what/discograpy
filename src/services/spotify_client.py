@@ -54,6 +54,7 @@ class SpotifyClient:
         )
         return False
 
+    @retry_on_failure(max_retries=5)
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         if not artist_name.strip():
             raise ValueError("Artist name cannot be empty")
