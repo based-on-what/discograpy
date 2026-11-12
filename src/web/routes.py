@@ -1,4 +1,3 @@
-import os
 from typing import Any, Dict, Optional
 
 import requests as _requests
@@ -54,31 +53,7 @@ def _auth_error_payload() -> Dict[str, Any]:
 
 
 def _ensure_spotify_token(client: SpotifyClient) -> Optional[Dict[str, Any]]:
-    from flask import current_app
-
-    auth_manager = client.sp.auth_manager
-    refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
-    try:
-        token_info = auth_manager.get_cached_token()
-        if token_info and not auth_manager.is_token_expired(token_info):
-            return None  # Token vigente, continuar
-
-        if refresh_token:
-            refreshed = auth_manager.refresh_access_token(refresh_token)
-            if refreshed:
-                return None  # Refresh exitoso, continuar
-            # refresh_access_token retornó None → el SPOTIPY_REFRESH_TOKEN es inválido
-            current_app.logger.warning(
-                "SPOTIPY_REFRESH_TOKEN is invalid or expired. "
-                "Re-run get_token.py locally and update the Railway variable."
-            )
-            return _auth_error_payload()
-
-        # Sin refresh_token configurado y sin token vigente: sin autenticación
-    except Exception as exc:
-        current_app.logger.warning("Failed to obtain Spotify token: %s", exc)
-
-    return _auth_error_payload()
+    return None if client.ensure_token() else _auth_error_payload()
 
 
 @bp.route("/")
@@ -140,7 +115,7 @@ def search_artist():
         artists = svc.search_artists(artist_name)
         enriched = svc.enrich_artists(artists)
         current_app.logger.info(
-            "Search: %d raw → %d enriched for %r", len(artists), len(enriched), artist_name
+            "Search: %d raw -> %d enriched for %r", len(artists), len(enriched), artist_name
         )
         return jsonify(enriched)
     except ValueError as exc:
@@ -222,7 +197,7 @@ def create_playlist():
                 ) from exc
             except _requests.exceptions.Timeout as exc:
                 raise jobs.JobError(
-                    "Spotify API timed out — rate limited. Wait a minute and try again.", 429
+                    "Spotify API timed out - rate limited. Wait a minute and try again.", 429
                 ) from exc
 
         return {

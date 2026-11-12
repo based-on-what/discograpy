@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,6 +27,32 @@ class SpotifyClient:
         except Exception as exc:
             self.logger.warning("Unable to validate token scopes: %s", exc)
             return False
+
+    def ensure_token(self) -> bool:
+        """True when a usable access token is available.
+
+        A failed refresh returns False instead of falling back to the expired
+        token: Spotify answers an expired token with an opaque 400.
+        """
+        auth_manager = self.sp.auth_manager
+        refresh_token = os.getenv("SPOTIPY_REFRESH_TOKEN")
+        try:
+            token_info = auth_manager.get_cached_token()
+            if token_info and not auth_manager.is_token_expired(token_info):
+                return True
+            if not refresh_token:
+                return False
+            if auth_manager.refresh_access_token(refresh_token):
+                return True
+        except Exception as exc:
+            self.logger.warning("Failed to obtain Spotify token: %s", exc)
+            return False
+
+        self.logger.warning(
+            "SPOTIPY_REFRESH_TOKEN is invalid or expired. "
+            "Re-run get_token.py locally and update the Railway variable."
+        )
+        return False
 
     def search_artists(self, artist_name: str) -> List[Dict[str, Any]]:
         if not artist_name.strip():
