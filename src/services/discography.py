@@ -1,17 +1,34 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.domain import album_types as at
 from src.domain import filters as fl
 from src.domain.models import RunSummary
 from src.services import musicbrainz
-from src.services.spotify_client import SpotifyClient
+from src.services.spotify_client import ALBUM_BATCH_SIZE, SpotifyClient
 
 PLAYLIST_DESCRIPTION = (
     "Made with DiscograPY, an open-source Spotify discography creator. "
     "Find the website at https://discograpy.up.railway.app "
 )
+
+# Shared by every job in the process, so the fan-out against the one Spotify
+# token is capped here no matter how many playlists are being built at once.
+MAX_CONCURRENT_FETCHES = 8
+_FETCH_POOL = ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_FETCHES, thread_name_prefix="discograpy-fetch"
+)
+
+# MusicBrainz allows 1 request/second, so one worker is the whole queue. A
+# search waits this long for its lookups and answers with whatever is ready;
+# the rest keep running and are cached for the next search of that artist.
+MB_ENRICH_BUDGET_SECONDS = 1.5
+_MB_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="discograpy-mb")
+# Lookups allowed to wait in that queue. Past it a search skips the lookup
+# instead of queueing work nobody will be around to see.
+_MB_BACKLOG = threading.BoundedSemaphore(10)
 
 
 class DiscographyService:
@@ -39,15 +56,31 @@ class DiscographyService:
         valid = [a for a in artists if a.get("id")]
         limit = self.MB_ENRICH_LIMIT if mb_limit is None else mb_limit
 
-        def _enrich(artist: Dict[str, Any], with_musicbrainz: bool) -> Dict[str, Any]:
-            mb_data: Dict[str, Any] = {"genres": [], "country": None}
-            if with_musicbrainz:
-                try:
-                    mb_data = musicbrainz.lookup_artist_metadata(
-                        (artist.get("name") or "").strip()
-                    )
-                except Exception as exc:
-                    self.logger.warning("Enrichment failed for %s: %s", artist.get("id"), exc)
+        backlog = _MB_BACKLOG
+
+        def _lookup_finished(lookup: "Future[Dict[str, Any]]") -> None:
+            backlog.release()
+            if lookup.exception() is not None:
+                self.logger.warning("MusicBrainz lookup failed: %s", lookup.exception())
+
+        metadata: Dict[int, Dict[str, Any]] = {}
+        pending: Dict[int, "Future[Dict[str, Any]]"] = {}
+        for index, artist in enumerate(valid[: max(limit, 0)]):
+            name = (artist.get("name") or "").strip()
+            known = musicbrainz.cached_artist_metadata(name)
+            if known is not None:
+                metadata[index] = known
+            elif backlog.acquire(blocking=False):
+                pending[index] = _MB_POOL.submit(musicbrainz.lookup_artist_metadata, name)
+                pending[index].add_done_callback(_lookup_finished)
+
+        finished, _ = wait(pending.values(), timeout=MB_ENRICH_BUDGET_SECONDS)
+        for index, lookup in pending.items():
+            if lookup in finished and lookup.exception() is None:
+                metadata[index] = lookup.result()
+
+        def _enrich(index: int, artist: Dict[str, Any]) -> Dict[str, Any]:
+            mb_data = metadata.get(index, {"genres": [], "country": None})
             mb_genres = [g for g in (mb_data.get("genres") or []) if g][:3]
             spotify_genres = [g for g in (artist.get("genres") or []) if g][:3]
             return {
@@ -59,9 +92,7 @@ class DiscographyService:
                 "location": mb_data.get("country") or "Unknown",
             }
 
-        # Sequential on purpose: lookup_artist_metadata throttles to 1 req/s
-        # (MusicBrainz limit), so parallel workers would only queue on the lock.
-        return [_enrich(a, with_musicbrainz=i < limit) for i, a in enumerate(valid)]
+        return [_enrich(index, artist) for index, artist in enumerate(valid)]
 
     def get_filtered_albums(
         self, artist_id: str, selection: int
@@ -73,112 +104,97 @@ class DiscographyService:
     def collect_tracks(
         self,
         albums: List[Dict[str, Any]],
-        verbose: bool = False,
         include_live_versions: bool = False,
         include_demos: bool = False,
         include_remixes: bool = False,
         include_instrumentals: bool = False,
         include_duplicate_versions: bool = False,
     ) -> Tuple[List[str], int]:
-        uri_to_duration: Dict[str, int] = {}
-        max_workers = min(8, len(albums) or 1)
+        fetchable = [album for album in albums if album.get("id")]
+        batches = [
+            fetchable[start : start + ALBUM_BATCH_SIZE]
+            for start in range(0, len(fetchable), ALBUM_BATCH_SIZE)
+        ]
+        albums_with_tracks: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(self.client.get_album_tracks, album["id"]): album
-                for album in albums
-                if album.get("id")
-            }
-            ordered: List[Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]]] = []
-            for future in as_completed(future_map):
-                album = future_map[future]
-                try:
-                    tracks = future.result()
-                except Exception as exc:
+        futures = [
+            _FETCH_POOL.submit(self._fetch_tracks, [album["id"] for album in batch])
+            for batch in batches
+        ]
+        # Read back in submit order, not completion order, so albums released
+        # on the same day always reach select_tracks in the same order.
+        for batch, future in zip(batches, futures):
+            tracks_by_album = future.result()
+            for album in batch:
+                if album["id"] not in tracks_by_album:
                     self.logger.warning(
-                        "Skipping album %r — failed to fetch tracks: %s",
-                        album.get("name", album.get("id")),
-                        exc,
+                        "Skipping album %r - Spotify returned no tracks for it",
+                        album.get("name", album["id"]),
                     )
                     continue
-                ordered.append(
-                    (album.get("release_date", ""), album, album.get("name", "Unknown"), tracks)
-                )
+                albums_with_tracks.append((album, tracks_by_album[album["id"]]))
 
-        ordered.sort(key=lambda x: x[0])
-
-        norm_cache: Dict[str, str] = {}
-
-        def _norm(name: str) -> str:
-            if name not in norm_cache:
-                norm_cache[name] = fl.normalize_title(name)
-            return norm_cache[name]
-
-        # Pre-compute all non-instrumental base names so instrumental matching is
-        # independent of album chronological order.
-        all_non_instrumental_bases: Set[str] = set()
-        for _, _album, _album_name, _tracks in ordered:
-            for _track in _tracks:
-                _name = str(_track.get("name", ""))
-                if not fl.has_instrumental_marker(f"{_name} {_album_name}"):
-                    _base = _norm(_name)
-                    if _base:
-                        all_non_instrumental_bases.add(_base)
-
-        track_candidates: List[Tuple[str, str, int, int]] = []
-        order_index = 0
-
-        for _, album, album_name, tracks in ordered:
-            kept: List[str] = []
-            skipped = 0
-            sorted_tracks = sorted(
-                tracks,
-                key=lambda t: (
-                    _safe_int(t.get("disc_number", 1)),
-                    _safe_int(t.get("track_number", 0)),
-                ),
-            )
-            for track in sorted_tracks:
-                uri = track.get("uri")
-                track_name = str(track.get("name", ""))
-                if not uri:
-                    continue
-                if not fl.passes_content_filters(
-                    track_name=track_name,
-                    album_name=album_name,
-                    include_live_versions=include_live_versions,
-                    include_demos=include_demos,
-                    include_remixes=include_remixes,
-                    include_instrumentals=include_instrumentals,
-                    all_non_instrumental_bases=all_non_instrumental_bases,
-                ):
-                    skipped += 1
-                    continue
-                kept.append(uri)
-                uri_to_duration[uri] = int(track.get("duration_ms") or 0)
-                normalized_base = _norm(track_name) or track_name.strip().lower()
-                track_candidates.append(
-                    (normalized_base, uri, at.album_release_priority(album), order_index)
-                )
-                order_index += 1
-
+        uris, total_ms, album_counts = fl.select_tracks(
+            albums_with_tracks,
+            include_live_versions=include_live_versions,
+            include_demos=include_demos,
+            include_remixes=include_remixes,
+            include_instrumentals=include_instrumentals,
+            include_duplicate_versions=include_duplicate_versions,
+        )
+        for album_name, kept, filtered in album_counts:
             self.logger.info(
-                "Processed album: %s (%s kept, %s filtered)", album_name, len(kept), skipped
+                "Processed album: %s (%s kept, %s filtered)", album_name, kept, filtered
+            )
+        return uris, total_ms
+
+    def _fetch_tracks(self, album_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        try:
+            return self.client.get_tracks_by_album(album_ids)
+        except Exception as exc:
+            self.logger.warning(
+                "Batch of %d albums failed (%s); fetching them one by one", len(album_ids), exc
             )
 
-        if include_duplicate_versions:
-            uris = [uri for _, uri, _, _ in track_candidates]
-            return uris, sum(uri_to_duration.get(u, 0) for u in uris)
+        # One bad album must not take the other nineteen of its batch with it.
+        tracks_by_album: Dict[str, List[Dict[str, Any]]] = {}
+        for album_id in album_ids:
+            try:
+                tracks_by_album.update(self.client.get_tracks_by_album([album_id]))
+            except Exception as exc:
+                self.logger.warning("Failed to fetch tracks of album %s: %s", album_id, exc)
+        return tracks_by_album
 
-        uris = fl.deduplicate_tracks(track_candidates)
-        return uris, sum(uri_to_duration.get(u, 0) for u in uris)
+    def publish(
+        self,
+        playlist_name: str,
+        track_uris: List[str],
+        artist_id: Optional[str] = None,
+        use_artist_image_as_cover: bool = False,
+    ) -> Tuple[Optional[str], bool, Optional[str]]:
+        """Create the playlist on Spotify. Returns (playlist_id, cover_applied, cover_error)."""
+        if self.dry_run:
+            return None, False, None
+
+        playlist_id = self.client.create_playlist(playlist_name, PLAYLIST_DESCRIPTION).get("id")
+        if not playlist_id:
+            return None, False, None
+
+        self.client.add_tracks_to_playlist(playlist_id, track_uris)
+        if not (use_artist_image_as_cover and artist_id):
+            return playlist_id, False, None
+
+        cover_applied, cover_error = self.client.set_playlist_cover_from_artist(
+            playlist_id=playlist_id,
+            artist_id=artist_id,
+        )
+        return playlist_id, cover_applied, cover_error
 
     def build_playlist(
         self,
         artist_id: str,
         artist_name: str,
         album_type_selection: int,
-        verbose: bool = False,
         include_live_versions: bool = False,
         include_demos: bool = False,
         include_remixes: bool = False,
@@ -190,15 +206,10 @@ class DiscographyService:
         if not filtered_albums:
             raise ValueError("No albums found for selected filters")
 
-        suffix = at.get_playlist_suffix(
-            album_type_selection,
-            actual_types if album_type_selection in (5, 6) else None,
-        )
-        playlist_name = f"{artist_name} discography {suffix}"
+        playlist_name = at.playlist_name(artist_name, album_type_selection, actual_types)
 
         track_uris, total_ms = self.collect_tracks(
             filtered_albums,
-            verbose=verbose,
             include_live_versions=include_live_versions,
             include_demos=include_demos,
             include_remixes=include_remixes,
@@ -208,20 +219,12 @@ class DiscographyService:
         if not track_uris:
             raise ValueError("No tracks found for selected albums")
 
-        playlist_id: Optional[str] = None
-        cover_applied = False
-        cover_error: Optional[str] = None
-
-        if not self.dry_run:
-            playlist = self.client.create_playlist(playlist_name, PLAYLIST_DESCRIPTION)
-            playlist_id = playlist.get("id")
-            if playlist_id:
-                self.client.add_tracks_to_playlist(playlist_id, track_uris)
-                if use_artist_image_as_cover:
-                    cover_applied, cover_error = self.client.set_playlist_cover_from_artist(
-                        playlist_id=playlist_id,
-                        artist_id=artist_id,
-                    )
+        playlist_id, cover_applied, cover_error = self.publish(
+            playlist_name,
+            track_uris,
+            artist_id=artist_id,
+            use_artist_image_as_cover=use_artist_image_as_cover,
+        )
 
         return RunSummary(
             artist=artist_name,
@@ -235,9 +238,3 @@ class DiscographyService:
             cover_error=cover_error,
         )
 
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0

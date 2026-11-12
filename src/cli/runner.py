@@ -6,7 +6,7 @@ from spotipy.exceptions import SpotifyException
 from src.cli import ui
 from src.domain import album_types as at
 from src.domain.models import RunSummary
-from src.services.discography import PLAYLIST_DESCRIPTION, DiscographyService
+from src.services.discography import DiscographyService
 from src.services.spotify_client import SpotifyClient
 
 
@@ -16,10 +16,10 @@ def run(svc: DiscographyService, verbose: bool = False) -> None:
     except SpotifyException as exc:
         message = SpotifyClient.error_message(exc)
         logging.getLogger(__name__).error("Spotify API error: %s", exc)
-        print(f"\n✗ {message}")
+        print(f"\nERROR: {message}")
     except EnvironmentError as exc:
         logging.getLogger(__name__).error("Environment configuration error: %s", exc)
-        print(f"\n✗ {exc}")
+        print(f"\nERROR: {exc}")
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Process interrupted by user")
         print("\n\nProcess cancelled by user.")
@@ -85,28 +85,20 @@ def _create_discography_playlist(svc: DiscographyService, verbose: bool = False)
                 _warn_missing_types(album_type_selection, actual_types)
 
             with ui.Spinner("Collecting tracks..."):
-                track_uris, _ = svc.collect_tracks(filtered_albums, verbose=verbose)
+                track_uris, _ = svc.collect_tracks(filtered_albums)
 
             if not track_uris:
                 print("No tracks found to process with the current filters.")
                 return
 
-            suffix = at.get_playlist_suffix(
-                album_type_selection,
-                actual_types if album_type_selection in (5, 6) else None,
-            )
-            playlist_name = f"{selected_name} discography {suffix}"
+            playlist_name = at.playlist_name(selected_name, album_type_selection, actual_types)
 
             playlist_id: Optional[str] = None
             if svc.dry_run:
                 print("\nDry-run enabled: playlist will not be created and tracks will not be uploaded.")
             else:
                 with ui.Spinner("Creating playlist..."):
-                    playlist = svc.client.create_playlist(playlist_name, PLAYLIST_DESCRIPTION)
-                    playlist_id = playlist.get("id")
-
-                with ui.Spinner("Adding tracks to playlist..."):
-                    svc.client.add_tracks_to_playlist(playlist_id, track_uris)
+                    playlist_id, _, _ = svc.publish(playlist_name, track_uris)
 
             summary = RunSummary(
                 artist=selected_name,

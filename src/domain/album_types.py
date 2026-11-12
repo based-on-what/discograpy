@@ -118,6 +118,12 @@ def get_playlist_suffix(selection: int, actual_types: Optional[Set[str]] = None)
     return config["suffix"]
 
 
+def playlist_name(
+    artist_name: str, selection: int, actual_types: Optional[Set[str]] = None
+) -> str:
+    return f"{artist_name} discography {get_playlist_suffix(selection, actual_types)}"
+
+
 def get_types_for_selection(selection: int) -> List[str]:
     return ALBUM_TYPE_CONFIGS.get(selection, ALBUM_TYPE_CONFIGS[0])["types"]
 

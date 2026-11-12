@@ -5,13 +5,13 @@ Cache handler que extiende MemoryCacheHandler de spotipy.
 
 Si Spotify rota el refresh token durante un access-token refresh automático,
 este handler detecta el cambio y actualiza SPOTIPY_REFRESH_TOKEN en Railway
-vía su GraphQL API — sin intervención manual.
+vía su GraphQL API, sin intervención manual.
 
 Variables de Railway necesarias (las primeras tres se inyectan solas):
-  RAILWAY_PROJECT_ID      → inyectada automáticamente por Railway
-  RAILWAY_ENVIRONMENT_ID  → inyectada automáticamente por Railway
-  RAILWAY_SERVICE_ID      → inyectada automáticamente por Railway
-  RAILWAY_API_TOKEN       → créala tú en railway.com → Account → Tokens
+  RAILWAY_PROJECT_ID      inyectada automáticamente por Railway
+  RAILWAY_ENVIRONMENT_ID  inyectada automáticamente por Railway
+  RAILWAY_SERVICE_ID      inyectada automáticamente por Railway
+  RAILWAY_API_TOKEN       créala tú en railway.com, Account, Tokens
 """
 
 import logging
@@ -50,17 +50,19 @@ class RailwayAwareCacheHandler(MemoryCacheHandler):
 
         new_rt = token_info.get("refresh_token")
         if not new_rt or new_rt == self._known_refresh_token:
-            return  # Sin cambio — nada que hacer
+            return
 
-        logger.info("Spotify rotó el refresh token. Intentando actualizar Railway…")
+        logger.info("Spotify rotó el refresh token. Intentando actualizar Railway...")
         if _update_railway_var("SPOTIPY_REFRESH_TOKEN", new_rt):
             self._known_refresh_token = new_rt
             logger.info("SPOTIPY_REFRESH_TOKEN actualizado en Railway correctamente.")
         else:
+            # The token itself never goes to the log: logs outlive the process
+            # and are readable by more people than the Railway variables.
             logger.warning(
                 "No se pudo actualizar SPOTIPY_REFRESH_TOKEN en Railway automáticamente. "
-                "Nuevo refresh token: %s — actualízalo manualmente en las variables del servicio.",
-                new_rt,
+                "El token rotado sigue vigente solo en memoria: ejecuta get_token.py y "
+                "actualiza la variable del servicio antes del próximo reinicio."
             )
 
 

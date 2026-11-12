@@ -81,17 +81,12 @@ def select_artist(artists: List[Dict[str, Any]]) -> Tuple[str, str]:
 
 
 def print_summary(summary: RunSummary) -> None:
-    playlist_url = (
-        f"https://open.spotify.com/playlist/{summary.playlist_id}"
-        if summary.playlist_id
-        else "n/a (dry-run)"
-    )
     rows = [
         ("Artist", summary.artist),
         ("Playlist", summary.playlist_name),
         ("Albums included", str(summary.albums_included)),
         ("Tracks added", str(summary.tracks_added)),
-        ("Playlist URL", playlist_url),
+        ("Playlist URL", summary.playlist_url or "n/a (dry-run)"),
     ]
     key_width = max(len(k) for k, _ in rows)
     print("\nSummary")

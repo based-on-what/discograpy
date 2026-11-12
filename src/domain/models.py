@@ -13,3 +13,9 @@ class RunSummary:
     dry_run: bool
     cover_applied: bool = False
     cover_error: Optional[str] = None
+
+    @property
+    def playlist_url(self) -> Optional[str]:
+        if not self.playlist_id:
+            return None
+        return f"https://open.spotify.com/playlist/{self.playlist_id}"

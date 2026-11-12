@@ -1,16 +1,27 @@
 import re
-from typing import Dict, List, Set, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Set, Tuple
 
-_RE_LIVE = re.compile(r"\b(live|en vivo|acoustic live)\b", re.IGNORECASE)
-_RE_DEMO = re.compile(r"\b(demo|rough mix|work tape|unreleased demo)\b", re.IGNORECASE)
-_RE_REMIX = re.compile(r"\b(remix|rework|edit|extended mix|club mix|dub mix)\b", re.IGNORECASE)
-_RE_INSTRUMENTAL = re.compile(r"\b(instrumental)\b", re.IGNORECASE)
+from src.domain.album_types import album_release_priority
+
+_LIVE = "live|en vivo|acoustic live"
+_DEMO = "demo|rough mix|work tape|unreleased demo"
+_REMIX = "remix|rework|edit|extended mix|club mix|dub mix"
+_INSTRUMENTAL = "instrumental"
+
+
+def _whole_words(alternatives: str) -> "re.Pattern[str]":
+    return re.compile(rf"\b({alternatives})\b", re.IGNORECASE)
+
+
+_RE_LIVE = _whole_words(_LIVE)
+_RE_DEMO = _whole_words(_DEMO)
+_RE_REMIX = _whole_words(_REMIX)
+_RE_INSTRUMENTAL = _whole_words(_INSTRUMENTAL)
 _RE_BRACKETS = re.compile(r"[\[\(].*?[\]\)]")
-_RE_KEYWORDS = re.compile(
-    r"\b(live|en vivo|acoustic live|demo|rough mix|work tape|unreleased demo|"
-    r"remix|rework|edit|extended mix|club mix|dub mix|instrumental)\b",
-    re.IGNORECASE,
-)
+# Built from the marker lists above so a new marker is also stripped when
+# normalizing titles for deduplication.
+_RE_KEYWORDS = _whole_words("|".join((_LIVE, _DEMO, _REMIX, _INSTRUMENTAL)))
 _RE_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
@@ -79,3 +90,79 @@ def deduplicate_tracks(
 
     deduped = sorted(best_by_track.values(), key=lambda item: item[2])
     return [uri for uri, _, _ in deduped]
+
+
+def select_tracks(
+    albums_with_tracks: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]],
+    include_live_versions: bool = False,
+    include_demos: bool = False,
+    include_remixes: bool = False,
+    include_instrumentals: bool = False,
+    include_duplicate_versions: bool = False,
+) -> Tuple[List[str], int, List[Tuple[str, int, int]]]:
+    """Pick the playlist's track URIs from already-fetched albums.
+
+    Returns (uris, total duration in ms, per-album (name, kept, filtered) counts).
+    """
+    ordered = sorted(albums_with_tracks, key=lambda pair: pair[0].get("release_date", ""))
+    normalize = lru_cache(maxsize=None)(normalize_title)
+
+    # Collected up front so an instrumental finds its vocal counterpart even
+    # when that counterpart sits on a later album.
+    non_instrumental_bases = {
+        normalize(str(track.get("name", "")))
+        for album, tracks in ordered
+        for track in tracks
+        if not has_instrumental_marker(f"{track.get('name', '')} {album.get('name', 'Unknown')}")
+    } - {""}
+
+    uri_to_duration: Dict[str, int] = {}
+    track_candidates: List[Tuple[str, str, int, int]] = []
+    album_counts: List[Tuple[str, int, int]] = []
+
+    for album, tracks in ordered:
+        album_name = album.get("name", "Unknown")
+        priority = album_release_priority(album)
+        kept = 0
+        filtered = 0
+        sorted_tracks = sorted(
+            tracks,
+            key=lambda t: (
+                _safe_int(t.get("disc_number", 1)),
+                _safe_int(t.get("track_number", 0)),
+            ),
+        )
+        for track in sorted_tracks:
+            uri = track.get("uri")
+            track_name = str(track.get("name", ""))
+            if not uri:
+                continue
+            if not passes_content_filters(
+                track_name=track_name,
+                album_name=album_name,
+                include_live_versions=include_live_versions,
+                include_demos=include_demos,
+                include_remixes=include_remixes,
+                include_instrumentals=include_instrumentals,
+                all_non_instrumental_bases=non_instrumental_bases,
+            ):
+                filtered += 1
+                continue
+            kept += 1
+            uri_to_duration[uri] = int(track.get("duration_ms") or 0)
+            normalized_base = normalize(track_name) or track_name.strip().lower()
+            track_candidates.append((normalized_base, uri, priority, len(track_candidates)))
+        album_counts.append((album_name, kept, filtered))
+
+    if include_duplicate_versions:
+        uris = [uri for _, uri, _, _ in track_candidates]
+    else:
+        uris = deduplicate_tracks(track_candidates)
+    return uris, sum(uri_to_duration.get(uri, 0) for uri in uris), album_counts
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0

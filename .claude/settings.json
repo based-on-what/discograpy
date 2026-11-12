@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node .agents/skills/impeccable/scripts/load-context.mjs)",
+      "mcp__gitnexus__impact",
+      "PowerShell(python -c \"import src.services.musicbrainz, src.services.spotify_client; print\\('ok'\\)\")",
+      "PowerShell(python app.py)",
+      "PowerShell(Start-Sleep -Seconds 4; $body = '{\"artist_name\":\"John\"}'; $sw = [System.Diagnostics.Stopwatch]::StartNew\\(\\); try { $r = Invoke-RestMethod -Uri http://127.0.0.1:5000/api/search -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120 } catch { Write-Host \"ERROR: $_\" }; $sw.Stop\\(\\); Write-Host \"Latency ms: $\\($sw.ElapsedMilliseconds\\)\"; Write-Host \"Count: $\\($r.Count\\)\"; $r[0..2] | ConvertTo-Json -Depth 3)",
+      "PowerShell(Start-Sleep -Seconds 4; $body = '{\"artist_name\":\"John\"}'; $sw = [System.Diagnostics.Stopwatch]::StartNew\\(\\); try { $r = Invoke-RestMethod -Uri http://127.0.0.1:5000/api/search -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120 } catch { Write-Host \"ERROR: $_\" }; $sw.Stop\\(\\); Write-Host \"Latency ms: $\\($sw.ElapsedMilliseconds\\)\"; Write-Host \"Count: $\\($r.Count\\)\"; $r[0..5] | ForEach-Object { \"$\\($_.name\\) | genres=$\\($_.genres -join ','\\) | loc=$\\($_.location\\)\" })",
+      "PowerShell($body = '{\"artist_name\":\"John\"}'; $sw = [System.Diagnostics.Stopwatch]::StartNew\\(\\); $r = Invoke-RestMethod -Uri http://127.0.0.1:5000/api/search -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120; $sw.Stop\\(\\); Write-Host \"Warm latency ms: $\\($sw.ElapsedMilliseconds\\); Count: $\\($r.Count\\)\")",
+      "mcp__gitnexus__detect_changes",
+      "PowerShell(ruff --version)",
+      "PowerShell(pip install ruff 2>&1)"
+    ]
+  }
+}

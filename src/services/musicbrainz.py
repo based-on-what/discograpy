@@ -1,10 +1,12 @@
+import logging
 import threading
 import time
-from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import pycountry
 import requests
+
+logger = logging.getLogger(__name__)
 
 _session = requests.Session()
 
@@ -23,22 +25,45 @@ def _throttle() -> None:
         _last_request_at = time.monotonic()
 
 
-@lru_cache(maxsize=2048)
+# A plain dict instead of lru_cache so a caller can ask "is this already known?"
+# without queueing behind the one-request-per-second throttle.
+_CACHE_MAX_ENTRIES = 2048
+_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def cached_artist_metadata(artist_name: str) -> Optional[Dict[str, Any]]:
+    """The metadata of an earlier successful lookup, or None. Never makes a request."""
+    return _cache.get(artist_name)
+
+
 def lookup_artist_metadata(artist_name: str) -> Dict[str, Any]:
     if not artist_name:
         return {"genres": [], "country": None}
+    cached = _cache.get(artist_name)
+    if cached is not None:
+        return cached
+    try:
+        metadata = _fetch_artist_metadata(artist_name)
+    except (requests.RequestException, ValueError) as exc:
+        # Not cached, so one timeout cannot pin an artist to "no metadata"
+        # for the rest of the process.
+        logger.warning("MusicBrainz lookup failed for %r: %s", artist_name, exc)
+        return {"genres": [], "country": None}
+    if len(_cache) >= _CACHE_MAX_ENTRIES:
+        _cache.pop(next(iter(_cache)), None)
+    _cache[artist_name] = metadata
+    return metadata
 
+
+def _fetch_artist_metadata(artist_name: str) -> Dict[str, Any]:
     endpoint = "https://musicbrainz.org/ws/2/artist/"
     headers = {"User-Agent": "DiscograPY/1.0 (https://github.com/based-on-what/discograpy)"}
     params = {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5}
 
-    try:
-        _throttle()
-        response = _session.get(endpoint, params=params, headers=headers, timeout=1.8)
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError):
-        return {"genres": [], "country": None}
+    _throttle()
+    response = _session.get(endpoint, params=params, headers=headers, timeout=1.8)
+    response.raise_for_status()
+    payload = response.json()
 
     candidates = payload.get("artists", []) if isinstance(payload, dict) else []
     if not candidates:
