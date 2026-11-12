@@ -85,7 +85,7 @@ def _create_discography_playlist(svc: DiscographyService, verbose: bool = False)
                 _warn_missing_types(album_type_selection, actual_types)
 
             with ui.Spinner("Collecting tracks..."):
-                track_uris, _ = svc.collect_tracks(filtered_albums, verbose=verbose)
+                track_uris, _ = svc.collect_tracks(filtered_albums)
 
             if not track_uris:
                 print("No tracks found to process with the current filters.")

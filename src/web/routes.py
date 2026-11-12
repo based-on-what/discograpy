@@ -132,7 +132,6 @@ def create_playlist():
     artist_id = (data.get("artist_id") or "").strip()
     artist_name = (data.get("artist_name") or "").strip()
     album_type_selection = data.get("album_type_selection", 0)
-    verbose = bool(data.get("verbose", False))
     include_live_versions = bool(data.get("include_live_versions", False))
     include_demos = bool(data.get("include_demos", False))
     include_remixes = bool(data.get("include_remixes", False))
@@ -173,7 +172,6 @@ def create_playlist():
                     artist_id=artist_id,
                     artist_name=artist_name,
                     album_type_selection=album_type_selection,
-                    verbose=verbose,
                     include_live_versions=include_live_versions,
                     include_demos=include_demos,
                     include_remixes=include_remixes,

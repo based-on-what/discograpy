@@ -73,7 +73,6 @@ class DiscographyService:
     def collect_tracks(
         self,
         albums: List[Dict[str, Any]],
-        verbose: bool = False,
         include_live_versions: bool = False,
         include_demos: bool = False,
         include_remixes: bool = False,
@@ -146,7 +145,6 @@ class DiscographyService:
         artist_id: str,
         artist_name: str,
         album_type_selection: int,
-        verbose: bool = False,
         include_live_versions: bool = False,
         include_demos: bool = False,
         include_remixes: bool = False,
@@ -162,7 +160,6 @@ class DiscographyService:
 
         track_uris, total_ms = self.collect_tracks(
             filtered_albums,
-            verbose=verbose,
             include_live_versions=include_live_versions,
             include_demos=include_demos,
             include_remixes=include_remixes,

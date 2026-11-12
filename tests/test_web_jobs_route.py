@@ -88,8 +88,11 @@ class TestCreateAccepts:
             dry_run=False,
         )
 
+        received = {}
+
         class FakeService:
             def build_playlist(self, **kwargs):
+                received.update(kwargs)
                 return summary
 
         monkeypatch.setattr(web, "get_client", lambda: object())
@@ -98,7 +101,13 @@ class TestCreateAccepts:
 
         res = client.post(
             "/api/create",
-            json={"artist_id": "abc", "artist_name": "Radiohead", "album_type_selection": 0},
+            json={
+                "artist_id": "abc",
+                "artist_name": "Radiohead",
+                "album_type_selection": 0,
+                "include_demos": True,
+                "verbose": True,
+            },
         )
 
         assert res.status_code == 202
@@ -106,6 +115,10 @@ class TestCreateAccepts:
 
         _settle(job_id)
         result = client.get(f"/api/jobs/{job_id}").get_json()["result"]
+
+        # "verbose" is still accepted in the body but no longer reaches the service.
+        assert "verbose" not in received
+        assert received["include_demos"] is True
 
         assert result["playlist_id"] == "pl123"
         assert result["playlist_url"] == "https://open.spotify.com/playlist/pl123"
