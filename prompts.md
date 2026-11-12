@@ -1,4 +1,4 @@
-# prompts.md — Improvement prompts for DiscograPY
+# prompts.md - Improvement prompts for DiscograPY
 
 Copy-paste prompts for AI-assisted improvement sessions. Ordered by priority inside
 each section. Each prompt is self-contained and scoped to one change (surgical edits,
@@ -16,7 +16,7 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 > MusicBrainz lookups via `ThreadPoolExecutor(max_workers=4)`, one per artist, for up
 > to 50 artists per search. MusicBrainz allows 1 request/second per IP and returns 503
 > when exceeded. Fix this: (1) only enrich the top N artists actually shown by the
-> frontend (check `templates/index.html` for how many results the UI renders — pass
+> frontend (check `templates/index.html` for how many results the UI renders - pass
 > that as a limit), (2) make MusicBrainz calls sequential or throttled to 1 req/s,
 > (3) keep the existing `lru_cache` in `src/services/musicbrainz.py`. Do not change
 > the response shape of `/api/search`. Measure before/after latency of a search for
@@ -38,7 +38,7 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 > only the single `self.sp.next(results)` call (a small private helper), and remove the
 > decorator from `_paginate` itself. Behavior on success must be identical. Note the
 > initial-page fetches in `get_artist_albums`/`get_album_tracks` already have their own
-> retry — don't double-wrap them.
+> retry - don't double-wrap them.
 
 ### [P2] Compress and cache static responses
 
@@ -63,7 +63,7 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 ### [P1] Add a test suite for the pure domain logic
 
 > This project has zero tests. Add `pytest` and create `tests/` covering the pure
-> functions first — they need no mocks: `src/domain/filters.py` (all marker functions,
+> functions first - they need no mocks: `src/domain/filters.py` (all marker functions,
 > `normalize_title`, `passes_content_filters` including the instrumental-counterpart
 > rule, `deduplicate_tracks` priority LP > EP > Single), and `src/domain/album_types.py`
 > (`is_ep`, `is_single`, `matches_selection` for all 7 selections, `filter_albums`,
@@ -85,14 +85,14 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 > Add a GitHub Actions workflow `.github/workflows/ci.yml` that runs on push and PR:
 > (1) `ruff check .` for linting, (2) `pytest`. Add a minimal `pyproject.toml` with
 > ruff config matching the existing code style (line length, import order) so the
-> first run passes without a giant reformat. Don't add mypy yet — that's a separate
+> first run passes without a giant reformat. Don't add mypy yet - that's a separate
 > step.
 
 ### [P2] Fix logging: rotation, no log file in repo, gitignore hygiene
 
 > `spotify_discography.log` is 2.4MB in the repo root with unbounded growth, and
 > `.spotify_cache` shows as untracked. In `src/logging_config.py`: use
-> `RotatingFileHandler` (e.g. 1MB × 3 backups) for local runs, and log to stdout only
+> `RotatingFileHandler` (e.g. 1MB x 3 backups) for local runs, and log to stdout only
 > when running on Railway (detect via `RAILWAY_PROJECT_ID`) since the filesystem is
 > ephemeral there anyway. Add `*.log` and `.spotify_cache` to `.gitignore` and remove
 > the log file from the working tree.
@@ -108,7 +108,7 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 
 ### [P3] Remove function-level import workarounds in routes.py
 
-> `src/web/routes.py` imports `current_app`, `get_client`, and `get_service` inside
+> `src/web/routes.py` imports `get_client` and `get_service` inside
 > route functions to dodge a circular import with `src/web/__init__.py`. Break the
 > cycle properly: move the singleton accessors (`get_client`, `get_service`, `_lock`)
 > from `src/web/__init__.py` into a new `src/web/deps.py`, then use normal top-level
@@ -119,16 +119,8 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 > `templates/index.html` is a 46KB single file mixing HTML, CSS, and JS. Extract the
 > CSS into `static/style.css` and the JS into `static/app.js`, served via Flask's
 > static folder (configure `static_folder` in `create_app()` alongside the existing
-> `template_folder`). No build step, no framework, no logic changes — pure extraction.
+> `template_folder`). No build step, no framework, no logic changes - pure extraction.
 > Verify the page works end-to-end afterwards.
-
-### [P3] Remove the dead `verbose` parameter
-
-> `verbose` is threaded from `/api/create` through `build_playlist()` into
-> `collect_tracks()` in `src/services/discography.py` but never read. Grep all callers
-> (web routes and `src/cli/runner.py`), then either remove the parameter end-to-end or
-> use it to gate the per-album `logger.info` line — pick whichever the CLI's
-> `--verbose` flag actually expects.
 
 ---
 
@@ -137,21 +129,21 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 ### [P1] Make /api/create non-blocking with a background job
 
 > `/api/create` in `src/web/routes.py` synchronously fetches every album, every track,
-> creates the playlist, and uploads a cover — for large discographies this holds a
+> creates the playlist, and uploads a cover - for large discographies this holds a
 > gunicorn worker for minutes and times out behind proxies. Convert it to a job model
-> with stdlib only (no Celery/Redis — single-process app): POST `/api/create` validates
+> with stdlib only (no Celery/Redis - single-process app): POST `/api/create` validates
 > input, submits the work to a module-level `ThreadPoolExecutor`, and returns 202 with
 > a `job_id`; new GET `/api/jobs/<id>` returns `pending | done(result) | error(message)`
 > from an in-memory dict with TTL cleanup. Update the fetch logic in
-> `templates/index.html` to poll. Keep the existing error→HTTP mapping in the job
+> `templates/index.html` to poll. Keep the existing error->HTTP mapping in the job
 > result. Note the constraint: jobs live in process memory, so this requires
-> `gunicorn --workers 1 --threads N` — implement that config change together (see next
+> `gunicorn --workers 1 --threads N` - implement that config change together (see next
 > prompt).
 
 ### [P1] Configure gunicorn explicitly for this workload
 
 > The Railway start command is bare `gunicorn app:app --bind 0.0.0.0:$PORT`, which
-> defaults to 1 sync worker and a 30s timeout — `/api/create` exceeds that today. The
+> defaults to 1 sync worker and a 30s timeout - `/api/create` exceeds that today. The
 > app is I/O-bound (Spotify API calls) and uses in-process singletons and in-memory
 > token cache, so threads scale better than workers here. Set the start command in
 > `railway.toml` to use `--workers 1 --threads 8 --timeout 300` and document in
@@ -166,14 +158,14 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 > origin, so any site can drive playlist creation from a visitor's browser. Add
 > `Flask-Limiter` with conservative limits (e.g. 10/minute on `/api/search`, 3/minute
 > on `/api/create`, keyed by remote address, in-memory storage), and restrict CORS to
-> the app's own origin (env var `ALLOWED_ORIGIN`, defaulting to same-origin — note the
+> the app's own origin (env var `ALLOWED_ORIGIN`, defaulting to same-origin - note the
 > frontend is served by this same Flask app, so cross-origin API access is not needed
 > at all; consider removing flask-cors entirely if nothing external calls the API).
 > Pin new dependencies.
 
 ### [P2] Cache Spotify reads across requests
 
-> All users share one Spotify token, so its rate limit is global — repeated searches
+> All users share one Spotify token, so its rate limit is global - repeated searches
 > for the same artist burn it. Add a small TTL cache (`cachetools.TTLCache` or a dict
 > with timestamps, given the single-process model) in front of
 > `SpotifyClient.search_artists` (TTL ~10 min) and `get_artist_albums` (TTL ~1 h) in
@@ -199,7 +191,7 @@ Legend: [P1] do first, [P2] high value, [P3] nice to have.
 
 ## Suggested order
 
-1. Pin dependencies + tests + CI (safety net first — everything else builds on it)
+1. Pin dependencies + tests + CI (safety net first - everything else builds on it)
 2. Rate limit + CORS + MusicBrainz throttle (stops active bleeding)
 3. Background job + gunicorn config (the big scalability win, do together)
 4. Logging, settings, caching, compression (incremental quality)
