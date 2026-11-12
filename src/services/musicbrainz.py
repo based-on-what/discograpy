@@ -1,7 +1,6 @@
 import logging
 import threading
 import time
-from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import pycountry
@@ -26,20 +25,36 @@ def _throttle() -> None:
         _last_request_at = time.monotonic()
 
 
+# A plain dict instead of lru_cache so a caller can ask "is this already known?"
+# without queueing behind the one-request-per-second throttle.
+_CACHE_MAX_ENTRIES = 2048
+_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def cached_artist_metadata(artist_name: str) -> Optional[Dict[str, Any]]:
+    """The metadata of an earlier successful lookup, or None. Never makes a request."""
+    return _cache.get(artist_name)
+
+
 def lookup_artist_metadata(artist_name: str) -> Dict[str, Any]:
     if not artist_name:
         return {"genres": [], "country": None}
+    cached = _cache.get(artist_name)
+    if cached is not None:
+        return cached
     try:
-        return _fetch_artist_metadata(artist_name)
+        metadata = _fetch_artist_metadata(artist_name)
     except (requests.RequestException, ValueError) as exc:
+        # Not cached, so one timeout cannot pin an artist to "no metadata"
+        # for the rest of the process.
         logger.warning("MusicBrainz lookup failed for %r: %s", artist_name, exc)
         return {"genres": [], "country": None}
+    if len(_cache) >= _CACHE_MAX_ENTRIES:
+        _cache.pop(next(iter(_cache)), None)
+    _cache[artist_name] = metadata
+    return metadata
 
 
-# Raises on a failed request instead of returning the empty fallback: lru_cache
-# does not store exceptions, so one timeout cannot pin an artist to "no
-# metadata" for the rest of the process.
-@lru_cache(maxsize=2048)
 def _fetch_artist_metadata(artist_name: str) -> Dict[str, Any]:
     endpoint = "https://musicbrainz.org/ws/2/artist/"
     headers = {"User-Agent": "DiscograPY/1.0 (https://github.com/based-on-what/discograpy)"}

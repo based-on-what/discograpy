@@ -225,7 +225,7 @@ def measure_concurrent_jobs(releases, jobs=4):
         thread.start()
     for thread in threads:
         thread.join()
-    print(f"\n== {jobs} jobs at once (jobs.MAX_WORKERS) on one shared token")
+    print(f"\n== {jobs} jobs at once on one shared token")
     print(f"peak concurrent requests: {fake.peak_in_flight}   wall: {time.perf_counter() - started:.2f}s")
 
 

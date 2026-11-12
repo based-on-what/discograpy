@@ -1,5 +1,6 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.domain import album_types as at
@@ -21,9 +22,13 @@ _FETCH_POOL = ThreadPoolExecutor(
 )
 
 # MusicBrainz allows 1 request/second, so one worker is the whole queue. A
-# search waits this long for its lookups and answers with whatever is ready.
+# search waits this long for its lookups and answers with whatever is ready;
+# the rest keep running and are cached for the next search of that artist.
 MB_ENRICH_BUDGET_SECONDS = 1.5
 _MB_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="discograpy-mb")
+# Lookups allowed to wait in that queue. Past it a search skips the lookup
+# instead of queueing work nobody will be around to see.
+_MB_BACKLOG = threading.BoundedSemaphore(10)
 
 
 class DiscographyService:
@@ -51,23 +56,31 @@ class DiscographyService:
         valid = [a for a in artists if a.get("id")]
         limit = self.MB_ENRICH_LIMIT if mb_limit is None else mb_limit
 
-        lookups = [
-            _MB_POOL.submit(musicbrainz.lookup_artist_metadata, (artist.get("name") or "").strip())
-            for artist in valid[:limit]
-        ]
-        wait(lookups, timeout=MB_ENRICH_BUDGET_SECONDS)
-        # Dropping the lookups that never started keeps abandoned searches from
-        # piling up behind the one-per-second MusicBrainz queue.
-        for lookup in lookups:
-            lookup.cancel()
+        backlog = _MB_BACKLOG
+
+        def _lookup_finished(lookup: "Future[Dict[str, Any]]") -> None:
+            backlog.release()
+            if lookup.exception() is not None:
+                self.logger.warning("MusicBrainz lookup failed: %s", lookup.exception())
+
+        metadata: Dict[int, Dict[str, Any]] = {}
+        pending: Dict[int, "Future[Dict[str, Any]]"] = {}
+        for index, artist in enumerate(valid[: max(limit, 0)]):
+            name = (artist.get("name") or "").strip()
+            known = musicbrainz.cached_artist_metadata(name)
+            if known is not None:
+                metadata[index] = known
+            elif backlog.acquire(blocking=False):
+                pending[index] = _MB_POOL.submit(musicbrainz.lookup_artist_metadata, name)
+                pending[index].add_done_callback(_lookup_finished)
+
+        finished, _ = wait(pending.values(), timeout=MB_ENRICH_BUDGET_SECONDS)
+        for index, lookup in pending.items():
+            if lookup in finished and lookup.exception() is None:
+                metadata[index] = lookup.result()
 
         def _enrich(index: int, artist: Dict[str, Any]) -> Dict[str, Any]:
-            mb_data: Dict[str, Any] = {"genres": [], "country": None}
-            if index < len(lookups) and lookups[index].done() and not lookups[index].cancelled():
-                try:
-                    mb_data = lookups[index].result()
-                except Exception as exc:
-                    self.logger.warning("Enrichment failed for %s: %s", artist.get("id"), exc)
+            mb_data = metadata.get(index, {"genres": [], "country": None})
             mb_genres = [g for g in (mb_data.get("genres") or []) if g][:3]
             spotify_genres = [g for g in (artist.get("genres") or []) if g][:3]
             return {
@@ -104,19 +117,14 @@ class DiscographyService:
         ]
         albums_with_tracks: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
 
-        future_map = {
-            _FETCH_POOL.submit(self.client.get_tracks_by_album, [album["id"] for album in batch]): batch
+        futures = [
+            _FETCH_POOL.submit(self._fetch_tracks, [album["id"] for album in batch])
             for batch in batches
-        }
-        for future in as_completed(future_map):
-            batch = future_map[future]
-            try:
-                tracks_by_album = future.result()
-            except Exception as exc:
-                self.logger.warning(
-                    "Skipping %d albums - failed to fetch their tracks: %s", len(batch), exc
-                )
-                continue
+        ]
+        # Read back in submit order, not completion order, so albums released
+        # on the same day always reach select_tracks in the same order.
+        for batch, future in zip(batches, futures):
+            tracks_by_album = future.result()
             for album in batch:
                 if album["id"] not in tracks_by_album:
                     self.logger.warning(
@@ -139,6 +147,23 @@ class DiscographyService:
                 "Processed album: %s (%s kept, %s filtered)", album_name, kept, filtered
             )
         return uris, total_ms
+
+    def _fetch_tracks(self, album_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        try:
+            return self.client.get_tracks_by_album(album_ids)
+        except Exception as exc:
+            self.logger.warning(
+                "Batch of %d albums failed (%s); fetching them one by one", len(album_ids), exc
+            )
+
+        # One bad album must not take the other nineteen of its batch with it.
+        tracks_by_album: Dict[str, List[Dict[str, Any]]] = {}
+        for album_id in album_ids:
+            try:
+                tracks_by_album.update(self.client.get_tracks_by_album([album_id]))
+            except Exception as exc:
+                self.logger.warning("Failed to fetch tracks of album %s: %s", album_id, exc)
+        return tracks_by_album
 
     def publish(
         self,

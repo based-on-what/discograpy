@@ -151,8 +151,10 @@ The `ugc-image-upload` scope is required for the artist-image-as-cover feature.
 
 All filter logic lives in `src/domain/filters.py`. `select_tracks()` there is the
 whole selection pipeline (ordering, filters, instrumental matching, dedup) as a
-pure function; `DiscographyService.collect_tracks()` only fetches each album's
-tracks concurrently and delegates to it.
+pure function; `DiscographyService.collect_tracks()` only fetches the tracks, 20
+albums per request (`ALBUM_BATCH_SIZE`, Spotify's cap) on the process-wide
+`_FETCH_POOL`, and delegates to it. A batch that fails is refetched album by
+album, so one bad album is skipped on its own.
 
 - Filters operate on **both** track name and album name - a "live" album taints
   all its tracks regardless of individual track names.
@@ -207,8 +209,10 @@ gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300
 Set in both `railway.toml` and `Procfile`. Keep them in sync.
 
 **`--workers 1` is not a performance choice, it is a correctness constraint.**
-Three pieces of state live in process memory: the job store in `jobs.py`, the
-`_client`/`_service` singletons, and the OAuth token in `MemoryCacheHandler`.
+Four pieces of state live in process memory: the job store in `jobs.py`, the
+`_client`/`_service` singletons, the OAuth token in `MemoryCacheHandler`, and the
+two pools in `discography.py` (`_FETCH_POOL` caps concurrent Spotify requests at 8
+across all jobs; `_MB_POOL` is the single MusicBrainz queue).
 With multiple workers a client would poll a worker that never saw its job, and
 each worker would refresh tokens independently - Spotify rotates refresh tokens,
 so the workers would invalidate each other's.
@@ -253,8 +257,15 @@ creation on the owner's account from a visitor's browser.
 - `ValueError` from service layer -> 400 to client.
 - `EnvironmentError` (missing env vars) -> 500 to client.
 - The `@retry_on_failure` decorator handles 429 (rate limit) and transient errors
-  with exponential backoff. It reads `Retry-After` headers. It is applied to all
-  `SpotifyClient` methods that make API calls.
+  with exponential backoff. It reads `Retry-After` headers. It wraps every single
+  Spotify request. `get_artist_albums` is deliberately not decorated as a whole:
+  its first page and each following page retry on their own, so a failing page
+  does not restart the pagination.
+- `/api/search` waits at most `MB_ENRICH_BUDGET_SECONDS` (1.5s) for MusicBrainz.
+  Lookups that are not ready in time come back as location "Unknown", keep
+  running, and are cached for the next search of that artist.
+- `add_tracks_to_playlist` sends its batches of 100 one after another on
+  purpose: concurrent batches can land out of playlist order.
 - `SpotifyClient.ensure_token()` is the pre-flight check before each API route.
   It returns `False` when there is no usable token: if `SPOTIPY_REFRESH_TOKEN` is
   set but the refresh returns `None`, it does **not** fall back to the expired

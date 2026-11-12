@@ -78,7 +78,7 @@ class SpotifyClient:
         # failing page does not send the pagination back to page one.
         albums = self._paginate(self._first_albums_page(artist_id, ",".join(album_types)))
         valid = [
-            {field: a[field] for field in _ALBUM_FIELDS if field in a}
+            _only(a, _ALBUM_FIELDS)
             for a in albums
             if a.get("release_date")
         ]
@@ -96,10 +96,7 @@ class SpotifyClient:
         """
         albums = self._albums_batch(album_ids).get("albums") or []
         return {
-            album_id: [
-                {field: track[field] for field in _TRACK_FIELDS if field in track}
-                for track in self._paginate(album["tracks"])
-            ]
+            album_id: [_only(track, _TRACK_FIELDS) for track in self._paginate(album["tracks"])]
             for album_id, album in zip(album_ids, albums)
             if album
         }
@@ -230,6 +227,10 @@ class SpotifyClient:
             503: "Spotify service unavailable. Please retry later.",
         }
         return messages.get(exc.http_status, f"Spotify API error ({exc.http_status}): {exc}")
+
+
+def _only(item: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
+    return {field: item[field] for field in fields if field in item}
 
 
 def _safe_int(value: Any) -> int:

@@ -45,7 +45,7 @@ Construido sobre la [Spotify Web API](https://developer.spotify.com/documentatio
 - Sufijo de playlist ajustado automáticamente cuando los tipos pedidos no existen para un artista.
 - **Filtros de contenido** (web): excluir o incluir versiones en vivo, demos, remixes e instrumentales por pedido.
 - **Deduplicación inteligente** (activa por defecto): conserva la mejor versión de cada pista por título normalizado y prioridad de lanzamiento; elimina duplicados regionales y redundancias de ediciones deluxe.
-- Descarga paralela de pistas de álbumes (`ThreadPoolExecutor`, hasta 8 workers).
+- Descarga de pistas por lotes: 20 álbumes por petición a Spotify, hasta 8 peticiones en paralelo.
 - Pistas agregadas en orden cronológico de lanzamiento.
 - **Imagen del artista como portada** (requiere scope `ugc-image-upload`).
 - **Modo dry-run** (CLI): descubrimiento y filtrado completo sin crear la playlist.
@@ -282,11 +282,11 @@ Variables de entorno requeridas en Railway: `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT
 
 ## Notas y limitaciones
 
-- **Tamaño de batch:** Límite de la API de Spotify de 100 pistas por petición de agregado. Manejado automáticamente con batching paralelo (hasta 4 uploads concurrentes).
+- **Tamaño de batch:** Límite de la API de Spotify de 100 pistas por petición de agregado. Manejado automáticamente; los lotes se envían uno tras otro para conservar el orden de la playlist.
 - **Duplicados regionales:** Spotify devuelve versiones específicas de mercado de álbumes por separado. La deduplicación reduce esto, pero activar `include_duplicate_versions` las incluirá todas.
 - **Las playlists son públicas por defecto.** Para crear playlists privadas, cambia `public=True` por `public=False` en `src/services/spotify_client.py` dentro de `create_playlist`.
 - **Subida de portada** requiere el scope `ugc-image-upload` en el refresh token. Si el token se obtuvo sin él, vuelve a ejecutar `get_token.py`.
-- **MusicBrainz** tiene timeout de 1.8s y caché LRU por proceso. Los fallos de enriquecimiento no son fatales; los metadatos faltantes se reemplazan con los géneros propios de Spotify.
+- **MusicBrainz** tiene timeout de 1.8s y caché por proceso. Una búsqueda espera como máximo 1.5s; lo que llegue después se muestra la próxima vez que se busque ese artista. Los fallos de enriquecimiento no son fatales; los metadatos faltantes se reemplazan con los géneros propios de Spotify.
 
 ---
 

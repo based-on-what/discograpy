@@ -28,7 +28,7 @@ def responses(monkeypatch):
 
     monkeypatch.setattr(musicbrainz._session, "get", fake_get)
     monkeypatch.setattr(musicbrainz, "_throttle", lambda: None)
-    monkeypatch.setattr(musicbrainz, "_cache", {}, raising=False)
+    monkeypatch.setattr(musicbrainz, "_cache", {})
     return queue
 
 

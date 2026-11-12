@@ -45,7 +45,7 @@ Built on the [Spotify Web API](https://developer.spotify.com/documentation/web-a
 - Smart playlist suffix adjusted when requested types are missing for an artist.
 - **Content filters** (web): exclude or include live versions, demos, remixes, and instrumentals per request.
 - **Smart deduplication** (default on): keeps the best version of each track by normalized title and album release priority; eliminates regional duplicates and deluxe-edition redundancy.
-- Parallel album track fetching (`ThreadPoolExecutor`, up to 8 workers).
+- Batched album track fetching: 20 albums per Spotify request, up to 8 requests in parallel.
 - Tracks added in chronological release order.
 - Optional **artist image as playlist cover** (`ugc-image-upload` scope required).
 - **Dry-run mode** (CLI): full discovery and filtering without creating the playlist.
@@ -282,11 +282,11 @@ Required environment variables on Railway: `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_
 
 ## Notes & Limitations
 
-- **Batch size:** Spotify API limit of 100 tracks per add-to-playlist request. Handled automatically with parallel batching (up to 4 concurrent batch uploads).
+- **Batch size:** Spotify API limit of 100 tracks per add-to-playlist request. Handled automatically; batches are sent one after another so the playlist keeps its order.
 - **Regional duplicates:** Spotify returns market-specific versions of albums separately. Deduplication reduces this, but enabling `include_duplicate_versions` will include all of them.
 - **Playlists are public by default.** To create private playlists, change `public=True` to `public=False` in `src/services/spotify_client.py` inside `create_playlist`.
 - **Cover upload** requires `ugc-image-upload` scope in the refresh token. If the token was obtained without it, re-run `get_token.py`.
-- **MusicBrainz** requests have a 1.8s timeout and are LRU-cached per process. Enrichment failures are non-fatal; missing metadata falls back to Spotify's own genre data.
+- **MusicBrainz** requests have a 1.8s timeout and are cached per process. A search waits at most 1.5s for them; results that arrive later are shown the next time that artist is searched. Enrichment failures are non-fatal; missing metadata falls back to Spotify's own genre data.
 
 ---
 
