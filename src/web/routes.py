@@ -225,16 +225,11 @@ def create_playlist():
                     "Spotify API timed out — rate limited. Wait a minute and try again.", 429
                 ) from exc
 
-        playlist_url = (
-            f"https://open.spotify.com/playlist/{summary.playlist_id}"
-            if summary.playlist_id
-            else None
-        )
         return {
             "artist": summary.artist,
             "playlist_name": summary.playlist_name,
             "playlist_id": summary.playlist_id,
-            "playlist_url": playlist_url,
+            "playlist_url": summary.playlist_url,
             "albums_included": summary.albums_included,
             "tracks_added": summary.tracks_added,
             "total_length": _format_duration(summary.total_ms),

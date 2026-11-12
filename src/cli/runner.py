@@ -91,11 +91,7 @@ def _create_discography_playlist(svc: DiscographyService, verbose: bool = False)
                 print("No tracks found to process with the current filters.")
                 return
 
-            suffix = at.get_playlist_suffix(
-                album_type_selection,
-                actual_types if album_type_selection in (5, 6) else None,
-            )
-            playlist_name = f"{selected_name} discography {suffix}"
+            playlist_name = at.playlist_name(selected_name, album_type_selection, actual_types)
 
             playlist_id: Optional[str] = None
             if svc.dry_run:

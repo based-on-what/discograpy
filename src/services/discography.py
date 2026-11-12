@@ -133,11 +133,7 @@ class DiscographyService:
         if not filtered_albums:
             raise ValueError("No albums found for selected filters")
 
-        suffix = at.get_playlist_suffix(
-            album_type_selection,
-            actual_types if album_type_selection in (5, 6) else None,
-        )
-        playlist_name = f"{artist_name} discography {suffix}"
+        playlist_name = at.playlist_name(artist_name, album_type_selection, actual_types)
 
         track_uris, total_ms = self.collect_tracks(
             filtered_albums,
