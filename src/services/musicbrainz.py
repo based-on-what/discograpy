@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from functools import lru_cache
@@ -5,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 import pycountry
 import requests
+
+logger = logging.getLogger(__name__)
 
 _session = requests.Session()
 
@@ -23,22 +26,29 @@ def _throttle() -> None:
         _last_request_at = time.monotonic()
 
 
-@lru_cache(maxsize=2048)
 def lookup_artist_metadata(artist_name: str) -> Dict[str, Any]:
     if not artist_name:
         return {"genres": [], "country": None}
+    try:
+        return _fetch_artist_metadata(artist_name)
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("MusicBrainz lookup failed for %r: %s", artist_name, exc)
+        return {"genres": [], "country": None}
 
+
+# Raises on a failed request instead of returning the empty fallback: lru_cache
+# does not store exceptions, so one timeout cannot pin an artist to "no
+# metadata" for the rest of the process.
+@lru_cache(maxsize=2048)
+def _fetch_artist_metadata(artist_name: str) -> Dict[str, Any]:
     endpoint = "https://musicbrainz.org/ws/2/artist/"
     headers = {"User-Agent": "DiscograPY/1.0 (https://github.com/based-on-what/discograpy)"}
     params = {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5}
 
-    try:
-        _throttle()
-        response = _session.get(endpoint, params=params, headers=headers, timeout=1.8)
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError):
-        return {"genres": [], "country": None}
+    _throttle()
+    response = _session.get(endpoint, params=params, headers=headers, timeout=1.8)
+    response.raise_for_status()
+    payload = response.json()
 
     candidates = payload.get("artists", []) if isinstance(payload, dict) else []
     if not candidates:
