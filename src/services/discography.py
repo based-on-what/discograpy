@@ -80,8 +80,8 @@ class DiscographyService:
         include_instrumentals: bool = False,
         include_duplicate_versions: bool = False,
     ) -> Tuple[List[str], int]:
-        uri_to_duration: Dict[str, int] = {}
         max_workers = min(8, len(albums) or 1)
+        albums_with_tracks: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
@@ -89,89 +89,32 @@ class DiscographyService:
                 for album in albums
                 if album.get("id")
             }
-            ordered: List[Tuple[str, Dict[str, Any], str, List[Dict[str, Any]]]] = []
             for future in as_completed(future_map):
                 album = future_map[future]
                 try:
                     tracks = future.result()
                 except Exception as exc:
                     self.logger.warning(
-                        "Skipping album %r — failed to fetch tracks: %s",
+                        "Skipping album %r - failed to fetch tracks: %s",
                         album.get("name", album.get("id")),
                         exc,
                     )
                     continue
-                ordered.append(
-                    (album.get("release_date", ""), album, album.get("name", "Unknown"), tracks)
-                )
+                albums_with_tracks.append((album, tracks))
 
-        ordered.sort(key=lambda x: x[0])
-
-        norm_cache: Dict[str, str] = {}
-
-        def _norm(name: str) -> str:
-            if name not in norm_cache:
-                norm_cache[name] = fl.normalize_title(name)
-            return norm_cache[name]
-
-        # Pre-compute all non-instrumental base names so instrumental matching is
-        # independent of album chronological order.
-        all_non_instrumental_bases: Set[str] = set()
-        for _, _album, _album_name, _tracks in ordered:
-            for _track in _tracks:
-                _name = str(_track.get("name", ""))
-                if not fl.has_instrumental_marker(f"{_name} {_album_name}"):
-                    _base = _norm(_name)
-                    if _base:
-                        all_non_instrumental_bases.add(_base)
-
-        track_candidates: List[Tuple[str, str, int, int]] = []
-        order_index = 0
-
-        for _, album, album_name, tracks in ordered:
-            kept: List[str] = []
-            skipped = 0
-            sorted_tracks = sorted(
-                tracks,
-                key=lambda t: (
-                    _safe_int(t.get("disc_number", 1)),
-                    _safe_int(t.get("track_number", 0)),
-                ),
-            )
-            for track in sorted_tracks:
-                uri = track.get("uri")
-                track_name = str(track.get("name", ""))
-                if not uri:
-                    continue
-                if not fl.passes_content_filters(
-                    track_name=track_name,
-                    album_name=album_name,
-                    include_live_versions=include_live_versions,
-                    include_demos=include_demos,
-                    include_remixes=include_remixes,
-                    include_instrumentals=include_instrumentals,
-                    all_non_instrumental_bases=all_non_instrumental_bases,
-                ):
-                    skipped += 1
-                    continue
-                kept.append(uri)
-                uri_to_duration[uri] = int(track.get("duration_ms") or 0)
-                normalized_base = _norm(track_name) or track_name.strip().lower()
-                track_candidates.append(
-                    (normalized_base, uri, at.album_release_priority(album), order_index)
-                )
-                order_index += 1
-
+        uris, total_ms, album_counts = fl.select_tracks(
+            albums_with_tracks,
+            include_live_versions=include_live_versions,
+            include_demos=include_demos,
+            include_remixes=include_remixes,
+            include_instrumentals=include_instrumentals,
+            include_duplicate_versions=include_duplicate_versions,
+        )
+        for album_name, kept, filtered in album_counts:
             self.logger.info(
-                "Processed album: %s (%s kept, %s filtered)", album_name, len(kept), skipped
+                "Processed album: %s (%s kept, %s filtered)", album_name, kept, filtered
             )
-
-        if include_duplicate_versions:
-            uris = [uri for _, uri, _, _ in track_candidates]
-            return uris, sum(uri_to_duration.get(u, 0) for u in uris)
-
-        uris = fl.deduplicate_tracks(track_candidates)
-        return uris, sum(uri_to_duration.get(u, 0) for u in uris)
+        return uris, total_ms
 
     def build_playlist(
         self,
@@ -235,9 +178,3 @@ class DiscographyService:
             cover_error=cover_error,
         )
 
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0

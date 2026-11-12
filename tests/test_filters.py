@@ -8,6 +8,7 @@ from src.domain.filters import (
     has_remix_marker,
     normalize_title,
     passes_content_filters,
+    select_tracks,
 )
 
 
@@ -122,7 +123,7 @@ class TestPassesContentFilters:
         assert not _passes("Song (Instrumental)", instrumentals=True, bases={"other"})
 
     def test_instrumental_with_empty_base_kept(self):
-        # "Instrumental" alone normalizes to "" — empty base skips the counterpart check.
+        # "Instrumental" alone normalizes to "" - empty base skips the counterpart check.
         assert _passes("Instrumental", instrumentals=True, bases=set())
 
     def test_instrumental_album_taints_track(self):
@@ -161,7 +162,7 @@ class TestDeduplicateTracks:
 
     def test_winner_keeps_its_own_appearance_order(self):
         # "song" first appears at order 0 (single) but the album version at order 2 wins,
-        # so it sorts by 2 — after "other" at order 1.
+        # so it sorts by 2 - after "other" at order 1.
         candidates = [
             ("song", "uri:single", 1, 0),
             ("other", "uri:other", 3, 1),
@@ -171,3 +172,24 @@ class TestDeduplicateTracks:
 
     def test_empty_input(self):
         assert deduplicate_tracks([]) == []
+
+
+class TestSelectTracks:
+    def test_orders_dedups_and_reports_per_album_counts(self):
+        lp = {"name": "The LP", "album_type": "album", "total_tracks": 10,
+              "release_date": "2020-01-01"}
+        single = {"name": "Hit - Single", "album_type": "single", "total_tracks": 1,
+                  "release_date": "2019-01-01"}
+        albums_with_tracks = [
+            (lp, [
+                {"name": "Hit", "uri": "uri:album", "duration_ms": 200},
+                {"name": "Hit (Live)", "uri": "uri:live", "duration_ms": 300},
+            ]),
+            (single, [{"name": "Hit", "uri": "uri:single", "duration_ms": 100}]),
+        ]
+
+        uris, total_ms, album_counts = select_tracks(albums_with_tracks)
+
+        assert uris == ["uri:album"]
+        assert total_ms == 200
+        assert album_counts == [("Hit - Single", 1, 0), ("The LP", 1, 1)]
